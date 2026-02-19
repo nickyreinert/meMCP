@@ -1,0 +1,154 @@
+# ============================================================
+# personal-mcp — config.yaml
+# ============================================================
+
+# ── Server ──────────────────────────────────────────────────
+server:
+  host: 0.0.0.0
+  port: 8000
+  admin_token: "change-me-please"   # or set ADMIN_TOKEN env var
+
+# ── Storage ─────────────────────────────────────────────────
+db_path: db/profile.db
+cache_dir: .cache
+cache_ttl_hours: 6
+watch_interval_minutes: 120
+
+# ── Your identity ────────────────────────────────────────────
+# fixed values, will be added to the generic endpoint
+# supports multi languages, e.g. identity.de.name → "name": "Nicky Reinert" in the German version of the profile
+# dynamic attributes, every sub attribute will appear in the JSON output of the generic endpoint, e.g. identity.name → "name": "Nicky Reinert"
+identity:
+  de:
+    name: Nicky Reinert
+    tagline: "Understand Data → Connect Interfaces → Automate Processes → Solve Problems"
+    location: Berlin, Germany
+    github_url: https://github.com/nickyreinert
+    medium_url: https://nickyreinert.medium.com
+    blog_url: https://nickyreinert.de
+    linkedin_url: https://www.linkedin.com/in/nickyreinert
+    description: "Persönliches Profil von Nicky Reinert, das berufliche Erfahrungen, Projekte und Veröffentlichungen zeigt."
+  en:
+    name: Nicky Reinert
+    tagline: "Understand Data → Connect Interfaces → Automate Processes → Solve Problems"
+    location: Berlin, Germany
+    github_url: https://github.com/nickyreinert
+    medium_url: https://nickyreinert.medium.com
+    blog_url: https://nickyreinert.de
+    linkedin_url: https://www.linkedin.com/in/nickyreinert
+    description: "Personal profile of Nicky Reinert, showcasing professional experience, projects, and publications."
+
+# ── LLM Enrichment ──────────────────────────────────────────
+# backend: groq | ollama | none
+#
+# GROQ (recommended: fast, free tier, ~100 calls/day free):
+#   pip install groq && export GROQ_API_KEY=gsk_...
+#   models: llama3-8b-8192 (fast) | llama3-70b-8192 (smart) | mixtral-8x7b-32768
+#
+# Ollama (fully local, zero API cost, privacy-first):
+#   brew install ollama && ollama serve && ollama pull llama3
+#   models: llama3 | mistral | phi3 | gemma2 | qwen2
+#
+llm:
+  backend: ollama
+  model: mistral-small:24b-instruct-2501-q4_K_M
+  groq_api_key: ""          # or set GROQ_API_KEY env var
+  ollama_url: http://localhost:11434
+
+# ── Statoc export ──────────────────────────────────────────
+# Fallback yaml in case the MCP server is not response, according to groundinpage rules https://groundingpage.com
+# TOOD: whats the best name here?
+static: llm.yaml
+
+
+# ── Stages (WHERE you worked/studied) ──────────────────────────
+# Stages are companies, institutions, professional roles, education, certifications
+# source_type:
+#   - linkedin_export: YAML file from LinkedIn (use scripts/linkedin_to_json.py to convert PDF)
+#   - linkedin_pdf: Direct PDF parsing (requires LLM, skipped when using --disable-llm)
+#   - manual_json: Hand-edited JSON file
+# source_path: Path to the export file
+# export_template: If true, creates stages_template.json after parsing for manual editing
+stages:
+  source_type: linkedin_pdf       # or "linkedin_export" or "manual_json"
+  source_path: linkedin_profile.pdf  # LinkedIn export PDF file
+  export_template: true              # Generate stages_template.json
+
+# ── Sources for oeuvre ─────────────────────────────────────────────────
+# Configure the sources to fetch your data from. Each source can be enabled/disabled independently.
+# source names must be unique, e.g. github, medium, blog_1, blog_2, etc. but you can define as many as you like.
+oeuvre_sources:
+
+  github:
+    enabled: true
+    connector: github_api
+    url: https://api.github.com/users/nickyreinert/repos
+    sub_type_override: coding   # Override default sub_type (coding/blog_post/article/book/website/podcast/video)
+    limit: 0                    # 0 = all, otherwise integer limit on number of repos to fetch
+    llm-processing: true
+    fetch_readmes: true         # true = richer descriptions, slower
+
+  medium_init:
+     # for initial fetch of your articles, go to the list fo alll your stories and copy the whole dome into an html file
+    enabled: false
+    connector: medium_raw
+    url: file://data/Medium.html  # Public RSS feed
+    
+
+  medium:
+    enabled: true
+    connector: manual
+    url: https://nickyreinert.medium.com/  # Profile page - shows all articles
+    sub_type_override: article
+    limit: 0  # 0 = all articles found
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+
+    connector-setup:
+      # Select all article links on profile page
+      # Medium uses various link formats, try broad selector then filter
+      post_url_selector: 'a[href*="medium.com/@nickyreinert"]'
+      # When visiting each article:
+      post-title-selector: 'h1'
+      post-content-selector: 'article'
+      post-published-date-selector: 'meta[property="article:published_time"]'
+      post-description-selector: 'meta[property="og:description"]'   
+
+  blog_1:
+    enabled: true
+    connector: rss
+    url: https://nickyreinert.de/index.xml
+    sub_type_override: blog_post  # Override default sub_type
+    llm-processing: true
+    limit: 0                    # 0 = all, otherwise integer limit on number of posts to fetch
+
+  # Example: Sitemap connector - Parses sitemap.xml and scrapes each URL
+  # blog_sitemap:
+  #   enabled: false
+  #   connector: sitemap
+  #   url: https://example.com/sitemap.xml
+  #   limit: 20                  # Process only first 20 URLs from sitemap
+  #   cache_ttl_hours: 336       # 14 days cache TTL
+  #   llm-processing: true
+  #
+  #   connector-setup:
+  #     post-title-selector: h1
+  #     post-content-selector: article
+  #     post-published-date-selector: 'time[datetime]'
+  #     post-description-selector: 'meta[name="description"]'
+
+# ── Internationalization (i18n) ──────────────────────────────────────────────
+# target_languages: languages to translate into (besides the default 'en').
+# Run: python -m llm.translator   or   POST /admin/translate
+#
+# batch_sleep_seconds: pause between LLM calls (GROQ free tier: ~30 req/min)
+# A full German translation of ~200 entities takes roughly 3-5 minutes.
+#
+i18n:
+  # while you can add as many languages to the identity area on top, if you want the dynamic part to be 
+  # translated automatically, you must add the language code here, e.g. "de" for German, "en" for English, "fr" for French, etc.
+  # the LLM will take over the translation part then
+  target_languages:
+    - de                          # German — primary second language
+    - en                          # English — primary second language
+  batch_sleep_seconds: 0.4        # ~25 req/min → safe under GROQ free tier

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>mcp://nickyreinert.berlin.germany.europe.earth.solarsystem.orionarm.milkyway.localgroup.virgosupercluster.laniakea.piscescetus.universe</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1rem;
+            overflow-x: auto;
+            border-radius: 4px;
+        }
+        .endpoint-list {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .endpoint-list li {
+            margin: 0.5rem 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hey human being. </h1>
+    <p>Put this prompt into your LLM of trust to work with this service:</p>
+    
+    <pre>
+Use the MCP server at {{ base_url }}
+
+Available endpoints:
+- GET /greeting - Identity card with bio
+- GET /entities - List all entities (jobs, projects, education)
+- GET /skills - All skills with usage counts
+- GET /technologies - All technologies used
+- GET /stages - Career timeline
+- GET /oeuvre - Side projects and articles
+
+Language support: Add ?lang=de for German or Accept-Language header
+
+All endpoints return structured JSON.
+    </pre>
+    
+    <h2>Example:</h2>
+    <pre>
+curl {{ base_url }}/greeting?lang=de
+curl {{ base_url }}/skills
+curl -H "Accept-Language: de" {{ base_url }}/entities
+    </pre>
+
+        <i>all your base are belong to us</i>
+
+</body>
+</html>

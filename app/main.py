@@ -1,0 +1,858 @@
+"""
+app/main.py — Personal MCP FastAPI Server v2.1
+===============================================
+All routes return structured JSON. Entity graph is the backbone.
+
+Language support:
+  Every data route accepts language via two mechanisms (priority order):
+    1. ?lang=de  query parameter
+    2. Accept-Language: de-DE,de;q=0.9  HTTP header
+  Falls back to 'en' if the requested lang has no translations stored.
+  Technology entity names are never translated (they are universal).
+  Every response includes a "_lang" meta field.
+
+Routes:
+  GET /                          → API index
+  GET /greeting                  → identity card (translated)
+  GET /categories                → entity type list + counts
+  GET /entities                  → paginated entity list (translated)
+  GET /entities/{id}             → single entity + relations (translated)
+  GET /entities/{id}/related     → graph neighbours (translated)
+  GET /category/{type}           → entities by type (translated)
+  GET /technology_stack          → all technology entities
+  GET /technology_stack/{tag}    → tech cross-reference (translated)
+  GET /tags                      → all tags + counts
+  GET /search?q=                 → full-text search (translated)
+  GET /graph                     → relation graph query
+  GET /languages                 → supported languages + translation coverage
+  GET /skills                    → all skills + entity counts
+  GET /skills/{name}             → detail: entities with this skill
+  GET /technologies              → all technologies + entity counts
+  GET /technologies/{name}       → detail: entities that used this tech
+  GET /stages                    → career timeline (jobs + education)
+  GET /stages/{id}               → single stage detail
+  GET /work                      → side projects + literature
+  GET /work/{id}                 → single work item detail
+  POST /admin/rebuild            → trigger scrape rebuild (token required)
+  POST /admin/translate          → trigger translation run (token required)
+  GET /health                    → liveness check
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import yaml
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, Header
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+from db.models import (
+    DB_PATH, get_db, init_db,
+    get_entity, list_entities, get_related,
+    list_all_tags,
+    get_translation, get_greeting_translation,
+    apply_translation, SUPPORTED_LANGS, DEFAULT_LANG,
+    query_skills, query_skill_detail,
+    query_technologies, query_technology_detail,
+    query_stages, query_stage_detail,
+    query_oeuvre, query_oeuvre_detail,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG & TEMPLATES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_config():
+    """Load config.yaml from project root."""
+    config_path = Path(__file__).parent.parent / "config.yaml"
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+CONFIG = load_config()
+APP_VERSION = "2.2.0"
+
+# Base URL for templates and documentation
+server_cfg = CONFIG.get("server", {})
+host = server_cfg.get('host', 'localhost')
+port = server_cfg.get('port', 8000)
+# Use localhost for display if host is 0.0.0.0 (bind-all)
+display_host = 'localhost' if host == '0.0.0.0' else host
+BASE_URL = f"http://{display_host}:{port}"
+
+# Templates directory
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APP SETUP
+# ─────────────────────────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["30/minute"])
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db(DB_PATH)
+    yield
+
+
+app = FastAPI(
+    title="Personal MCP Server",
+    description="Entity-graph personal profile API with EN/DE multi-language support.",
+    version=APP_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url=None,
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+LANG_LABELS = {"en": "English", "de": "Deutsch"}
+
+
+def ok(data: Any, meta: dict = None) -> dict:
+    resp = {"status": "success", "data": data}
+    if meta:
+        resp["meta"] = meta
+    return resp
+
+
+def err(msg: str, code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=code,
+        content={"status": "error", "error": {"code": code, "message": msg}},
+    )
+
+
+def db():
+    conn = get_db(DB_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGUAGE NEGOTIATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def resolve_lang(lang_param: Optional[str], accept_language: Optional[str]) -> str:
+    """
+    Priority: ?lang= > Accept-Language header > DEFAULT_LANG.
+    Falls back silently for unsupported codes.
+    """
+    for candidate in (lang_param, _best_accept_lang(accept_language)):
+        if candidate and candidate.lower() in SUPPORTED_LANGS:
+            return candidate.lower()
+    return DEFAULT_LANG
+
+
+def _best_accept_lang(header: Optional[str]) -> Optional[str]:
+    """Parse 'de-DE,de;q=0.9,en;q=0.8' → highest-weighted supported lang."""
+    if not header:
+        return None
+    best_lang, best_q = None, -1.0
+    for part in header.replace(" ", "").split(","):
+        tag_q = part.split(";")
+        tag = tag_q[0].split("-")[0].lower()
+        q = 1.0
+        if len(tag_q) > 1 and tag_q[1].startswith("q="):
+            try:
+                q = float(tag_q[1][2:])
+            except ValueError:
+                pass
+        if tag in SUPPORTED_LANGS and q > best_q:
+            best_lang, best_q = tag, q
+    return best_lang
+
+
+def _localise(conn, entity: dict, lang: str) -> dict:
+    """Overlay stored translation. Skips technology/person (names are universal)."""
+    if lang == DEFAULT_LANG or entity.get("type") in ("technology", "person"):
+        return entity
+    translation = get_translation(conn, entity["id"], lang)
+    if not translation:
+        return entity
+    return apply_translation(entity, translation)
+
+
+def _localise_many(conn, entities: list, lang: str) -> list:
+    if lang == DEFAULT_LANG:
+        return entities
+    return [_localise(conn, e, lang) for e in entities]
+
+
+def _lang_meta(lang: str) -> dict:
+    return {"lang": lang, "lang_label": LANG_LABELS.get(lang, lang)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENTITY / RELATION METADATA
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENTITY_META = {
+    "person":       {"label": "Person",        "description": "Profile owner identity"},
+    "professional": {"label": "Professional",  "description": "Work experience & roles"},
+    "company":      {"label": "Company",       "description": "Employers and clients"},
+    "education":    {"label": "Education",     "description": "Degrees, courses, certifications"},
+    "institution":  {"label": "Institution",   "description": "Universities, schools, orgs"},
+    "side_project": {"label": "Side Project",  "description": "Personal & open-source projects"},
+    "literature":   {"label": "Literature",    "description": "Articles, blog posts, books"},
+    "technology":   {"label": "Technology",    "description": "Languages, frameworks, tools"},
+    "skill":        {"label": "Skill",         "description": "Competency areas and expertise"},
+    "achievement":  {"label": "Achievement",   "description": "Awards, certifications, milestones"},
+    "event":        {"label": "Event",         "description": "Conferences, hackathons, talks"},
+}
+
+RELATION_META = {
+    "worked_at":       "Person worked at a company",
+    "studied_at":      "Person studied at an institution",
+    "used_technology": "Entity used this technology",
+    "authored":        "Person authored this content",
+    "featured_in":     "Technology featured in this context",
+    "related_to":      "Generic cross-link between entities",
+    "part_of":         "Sub-project or sub-task relationship",
+    "inspired_by":     "Inspired by another entity",
+    "awarded_by":      "Achievement granted by this entity",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/", summary="API index", response_class=HTMLResponse)
+@limiter.limit("60/minute")
+async def index(request: Request):
+    data = {
+        "name":    "Personal MCP Server",
+        "version": APP_VERSION,
+        "languages": {
+            "supported":   list(SUPPORTED_LANGS),
+            "default":     DEFAULT_LANG,
+            "negotiation": "?lang=de  or  Accept-Language: de header",
+        },
+        "routes": {
+            "/greeting":               "Identity card — name, tagline, bio, links",
+            "/languages":              "Translation coverage per language",
+            "/entities":               "Paginated entity list with filters (category (stage|oeuvre), sub_category(study|school|intern|part-time), skills, technology, tags)",
+            "/entities/{id}":          "Single entity + extension data + relations",
+            "/entities/{id}/related":  "Graph neighbours of an entity",
+            "/skills":                 "Skills describe competencies and expertise areas like Data Analytics, SEO, GenAI, etc.",
+            "/skills/{name}":          "All entities with this skill",
+            "/technology":           "Technologies point to actual tech stacks, frameworks and tools like Python, Docker, Adobe Analytics, etc.",
+            "/technology/{name}":    "All entities that used this technology",
+            "/tags":                   "All tags with usage counts",
+            "/stages":                 "Reflects career timeline: jobs + education with date ranges",
+            "/stages/{id}":            "Single stage detail + skills + technologies",
+            "/oeuvre":                 "Pet projects, side projects, articles or projects from different stages of the career",
+            "/oeuvre/{id}":            "Single work item detail",
+            "/health":                 "Liveness check",
+            "/search":                 "Full-text search across entities",
+            "/graph":                  "Query the relation graph directly"
+        },
+        "entity_types":   ENTITY_META,
+        "relation_types": RELATION_META,
+    }
+    json_str = json.dumps(ok(data), indent=2)
+    return f"<script>window.location.href='/human';</script>{json_str}"
+
+
+@app.get("/human", response_class=HTMLResponse)
+async def human_endpoint(request: Request):
+    """Human-friendly instructions page."""
+    return templates.TemplateResponse(
+        "human.html",
+        {"request": request, "base_url": BASE_URL}
+    )
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "ts": time.time(), "version": APP_VERSION}
+
+
+# ── Language coverage ─────────────────────────────────────────────────────────
+
+@app.get("/languages", summary="Language support + translation coverage")
+@limiter.limit("30/minute")
+async def languages(request: Request, conn=Depends(db)):
+    """
+    Returns each supported language with translation coverage percentage.
+    Use this to decide whether you need to run /admin/translate.
+    """
+    total = conn.execute(
+        "SELECT COUNT(*) FROM entities WHERE visibility='public' "
+        "AND type NOT IN ('technology','person')"
+    ).fetchone()[0]
+
+    coverage = []
+    for lang in sorted(SUPPORTED_LANGS):
+        n_translated = conn.execute(
+            "SELECT COUNT(DISTINCT entity_id) FROM entity_translations WHERE lang=?",
+            (lang,),
+        ).fetchone()[0]
+        greeting_done = bool(
+            conn.execute(
+                "SELECT 1 FROM greeting_translations WHERE lang=?", (lang,)
+            ).fetchone()
+        )
+        coverage.append({
+            "lang":                 lang,
+            "label":                LANG_LABELS.get(lang, lang),
+            "is_default":           lang == DEFAULT_LANG,
+            "entities_total":       total,
+            "entities_translated":  n_translated,
+            "coverage_pct":         round(n_translated / total * 100, 1) if total else 0,
+            "greeting_translated":  greeting_done,
+        })
+
+    return ok({"languages": coverage})
+
+
+# ── Greeting ──────────────────────────────────────────────────────────────────
+
+@app.get("/greeting", summary="Identity card (translated)")
+@limiter.limit("60/minute")
+async def greeting(
+    request: Request,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns the profile owner's identity card.
+    Tagline and greeting text are served in the requested language
+    if a translation exists (run POST /admin/translate first).
+    """
+    resolved = resolve_lang(lang, accept_language)
+
+    person_rows = list_entities(conn, types=["person"], limit=1)
+    if not person_rows:
+        raise HTTPException(404, "Person entity not found — run the seeder first.")
+    person = person_rows[0]
+
+    raw_data = person.get("raw_data") or {}
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except Exception:
+            raw_data = {}
+
+    # Base values (English / seeded)
+    tagline       = person.get("description", "")
+    greeting_text = raw_data.get("greeting") or tagline
+
+    # Overlay translation if available
+    if resolved != DEFAULT_LANG:
+        tr = get_greeting_translation(conn, resolved)
+        if tr:
+            tagline       = tr.get("tagline") or tagline
+            greeting_text = tr.get("greeting") or greeting_text
+
+    return ok(
+        {
+            "name":     person["title"],
+            "tagline":  tagline,
+            "greeting": greeting_text,
+            "location": raw_data.get("location"),
+            "links": {
+                "website":  person.get("url"),
+                "github":   raw_data.get("github"),
+                "medium":   raw_data.get("medium"),
+                "linkedin": raw_data.get("linkedin"),
+                "email":    raw_data.get("email"),
+            },
+            "tags": person.get("tags", []),
+        },
+        meta=_lang_meta(resolved),
+    )
+
+
+# ── Categories ────────────────────────────────────────────────────────────────
+
+@app.get("/categories", summary="Entity types + counts")
+@limiter.limit("30/minute")
+async def categories(request: Request, conn=Depends(db)):
+    rows = conn.execute("""
+        SELECT type, COUNT(*) as count FROM entities
+        WHERE visibility='public'
+        GROUP BY type ORDER BY count DESC
+    """).fetchall()
+    cats = []
+    for row in rows:
+        meta = ENTITY_META.get(row["type"], {"label": row["type"], "description": ""})
+        cats.append({
+            "type":        row["type"],
+            "label":       meta["label"],
+            "description": meta["description"],
+            "count":       row["count"],
+        })
+    return ok({"categories": cats})
+
+
+# ── Entities list ─────────────────────────────────────────────────────────────
+
+@app.get("/entities", summary="List entities (paginated, translated)")
+@limiter.limit("30/minute")
+async def entities_list(
+    request: Request,
+    conn=Depends(db),
+    type: Optional[str]            = Query(None, description="Filter by entity type"),
+    tags: Optional[str]            = Query(None, description="Comma-separated tags"),
+    source: Optional[str]          = Query(None, description="Filter by source"),
+    search: Optional[str]          = Query(None, description="Full-text search"),
+    limit: int                     = Query(20, ge=1, le=100),
+    offset: int                    = Query(0, ge=0),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    resolved  = resolve_lang(lang, accept_language)
+    tag_list  = [t.strip() for t in tags.split(",")] if tags else None
+    type_list = [type] if type else None
+
+    rows = list_entities(
+        conn, types=type_list, tags=tag_list,
+        source=source, search=search, limit=limit, offset=offset,
+    )
+    rows = _localise_many(conn, rows, resolved)
+
+    count_sql = "SELECT COUNT(DISTINCT id) FROM entities WHERE visibility='public'"
+    count_params = []
+    if type:
+        count_sql += " AND type=?"
+        count_params.append(type)
+    total = conn.execute(count_sql, count_params).fetchone()[0]
+
+    return ok(
+        {"entries": rows},
+        meta={
+            "total": total, "limit": limit,
+            "offset": offset, "returned": len(rows),
+            **_lang_meta(resolved),
+        },
+    )
+
+
+# ── Single entity ─────────────────────────────────────────────────────────────
+
+@app.get("/entities/{entity_id}", summary="Single entity detail (translated)")
+@limiter.limit("60/minute")
+async def entity_detail(
+    request: Request,
+    entity_id: str,
+    conn=Depends(db),
+    include_relations: bool        = Query(True),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """Full entity detail + typed extension + graph relations, all localised."""
+    resolved = resolve_lang(lang, accept_language)
+
+    entity = get_entity(conn, entity_id)
+    if not entity:
+        return err(f"Entity '{entity_id}' not found", 404)
+
+    entity = _localise(conn, entity, resolved)
+
+    if include_relations:
+        related = get_related(conn, entity_id)
+        entity["relations"] = _localise_many(conn, related, resolved)
+
+    return ok(entity, meta=_lang_meta(resolved))
+
+
+# ── Entity neighbours ─────────────────────────────────────────────────────────
+
+@app.get("/entities/{entity_id}/related", summary="Entity graph neighbours (translated)")
+@limiter.limit("30/minute")
+async def entity_related(
+    request: Request,
+    entity_id: str,
+    conn=Depends(db),
+    rel_type: Optional[str]        = Query(None, description="Filter by relation type"),
+    direction: str                  = Query("both", regex="^(in|out|both)$"),
+    lang: Optional[str]            = Query(None),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    resolved = resolve_lang(lang, accept_language)
+
+    if not conn.execute("SELECT id FROM entities WHERE id=?", (entity_id,)).fetchone():
+        return err(f"Entity '{entity_id}' not found", 404)
+
+    related = get_related(conn, entity_id, rel_type=rel_type, direction=direction)
+    related = _localise_many(conn, related, resolved)
+
+    return ok(
+        {"entity_id": entity_id, "related": related, "count": len(related)},
+        meta=_lang_meta(resolved),
+    )
+
+
+# ── Category ──────────────────────────────────────────────────────────────────
+
+@app.get("/category/{entity_type}", summary="Entities by type (translated)")
+@limiter.limit("30/minute")
+async def category(
+    request: Request,
+    entity_type: str,
+    conn=Depends(db),
+    tags: Optional[str]            = Query(None, description="Comma-separated tag filter"),
+    search: Optional[str]          = Query(None),
+    limit: int                     = Query(50, ge=1, le=100),
+    offset: int                    = Query(0, ge=0),
+    lang: Optional[str]            = Query(None),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    if entity_type not in ENTITY_META:
+        return err(
+            f"Unknown entity type '{entity_type}'. Valid: {list(ENTITY_META.keys())}", 400
+        )
+    resolved = resolve_lang(lang, accept_language)
+    tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
+    rows = list_entities(
+        conn, types=[entity_type], tags=tag_list,
+        search=search, limit=limit, offset=offset,
+    )
+    rows = _localise_many(conn, rows, resolved)
+
+    return ok(
+        {
+            "type":    entity_type,
+            "label":   ENTITY_META[entity_type]["label"],
+            "entries": rows,
+            "count":   len(rows),
+        },
+        meta=_lang_meta(resolved),
+    )
+
+
+# ── Tags ──────────────────────────────────────────────────────────────────────
+
+@app.get("/tags", summary="All tags + counts")
+@limiter.limit("30/minute")
+async def tags_route(request: Request, conn=Depends(db)):
+    all_tags = list_all_tags(conn)
+    return ok({"tags": all_tags, "count": len(all_tags)})
+
+
+# ── Search ────────────────────────────────────────────────────────────────────
+
+@app.get("/search", summary="Full-text search (translated results)")
+@limiter.limit("20/minute")
+async def search(
+    request: Request,
+    conn=Depends(db),
+    q: str                         = Query(..., min_length=2),
+    type: Optional[str]            = Query(None),
+    limit: int                     = Query(20, ge=1, le=50),
+    lang: Optional[str]            = Query(None),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """Searches base (English) text; returns results localised into requested lang."""
+    resolved  = resolve_lang(lang, accept_language)
+    type_list = [type] if type else None
+
+    rows = list_entities(conn, types=type_list, search=q, limit=limit)
+    rows = _localise_many(conn, rows, resolved)
+
+    return ok(
+        {"query": q, "entries": rows, "count": len(rows)},
+        meta=_lang_meta(resolved),
+    )
+
+
+# ── Relation graph ────────────────────────────────────────────────────────────
+
+@app.get("/graph", summary="Relation graph query")
+@limiter.limit("20/minute")
+async def graph(
+    request: Request,
+    conn=Depends(db),
+    from_id: Optional[str]  = Query(None, description="Source entity ID"),
+    to_id: Optional[str]    = Query(None, description="Target entity ID"),
+    rel_type: Optional[str] = Query(None, description="Relation type filter"),
+    limit: int              = Query(50, ge=1, le=200),
+):
+    """Query the relation graph. Supply at least one filter parameter."""
+    if not from_id and not to_id and not rel_type:
+        return err("Provide at least one of: from_id, to_id, rel_type")
+
+    where, params = [], []
+    if from_id:
+        where.append("r.from_id=?");  params.append(from_id)
+    if to_id:
+        where.append("r.to_id=?");    params.append(to_id)
+    if rel_type:
+        where.append("r.rel_type=?"); params.append(rel_type)
+
+    sql = f"""
+        SELECT r.id, r.from_id, r.to_id, r.rel_type, r.weight, r.note,
+               ef.title as from_title, ef.type as from_type,
+               et.title as to_title,   et.type as to_type
+        FROM relations r
+        JOIN entities ef ON ef.id = r.from_id
+        JOIN entities et ON et.id = r.to_id
+        WHERE {' AND '.join(where)}
+        ORDER BY r.weight DESC LIMIT ?
+    """
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return ok({"edges": [dict(r) for r in rows], "count": len(rows)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIMARY ROUTES — SKILLS / TECHNOLOGIES / STAGES / OEUVRE
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Skills ────────────────────────────────────────────────────────────────────
+
+@app.get("/skills", summary="All skills with entity counts")
+@limiter.limit("30/minute")
+async def skills_list(
+    request: Request,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns every distinct skill tag with how many entities carry it.
+    Skills are broad competencies: 'Data Analytics', 'Project Management',
+    'GenAI', 'SEO', 'Automation', etc.
+    Different from /technologies which lists specific tools & frameworks.
+
+    Use /skills/{name} to drill into all entities with a given skill.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    skills = query_skills(conn)
+    return ok(
+        {"skills": skills, "count": len(skills)},
+        meta=_lang_meta(resolved),
+    )
+
+
+@app.get("/skills/{skill_name}", summary="Entities with a specific skill")
+@limiter.limit("30/minute")
+async def skill_detail(
+    request: Request,
+    skill_name: str,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns all entities (jobs, projects, articles, education entries) that
+    carry the requested skill, grouped by entity type.
+    Results are localised into the requested language.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    detail = query_skill_detail(conn, skill_name)
+    if not detail["entities"]:
+        return err(f"No entities found with skill '{skill_name}'", 404)
+    detail["entities"] = _localise_many(conn, detail["entities"], resolved)
+    for key in detail["by_type"]:
+        detail["by_type"][key] = _localise_many(conn, detail["by_type"][key], resolved)
+    return ok(detail, meta=_lang_meta(resolved))
+
+
+# ── Technology ───────────────────────────────────────────────────────────────
+
+@app.get("/technology", summary="All technologies with entity counts")
+@limiter.limit("30/minute")
+async def technologies_list(
+    request: Request,
+    conn=Depends(db),
+    category: Optional[str] = Query(
+        None,
+        description="Filter by tech category: language | framework | platform | tool | cloud | database",
+    ),
+):
+    """
+    Returns every distinct technology tag with how many entities used it.
+    Technologies are specific tools, frameworks, and platforms:
+    'Adobe Analytics', 'Python', 'Docker', 'FastAPI', etc.
+
+    Optionally filter by category. Use /technology/{name} for full context.
+    Note: technology names are universal — no translation applied.
+    """
+    technologies = query_technologies(conn, category=category)
+    return ok({"technologies": technologies, "count": len(technologies)})
+
+
+@app.get("/technology/{tech_name}", summary="Entities that used a technology")
+@limiter.limit("30/minute")
+async def technology_detail(
+    request: Request,
+    tech_name: str,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns all entities that used this technology, plus the technology
+    entity itself (with category, proficiency). Grouped by entity type.
+    Entity titles/descriptions are localised; tech name stays in its original form.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    detail = query_technology_detail(conn, tech_name)
+    if not detail["entities"] and not detail["tech_entity"]:
+        return err(f"Technology '{tech_name}' not found", 404)
+    detail["entities"] = _localise_many(conn, detail["entities"], resolved)
+    for key in detail["by_type"]:
+        detail["by_type"][key] = _localise_many(conn, detail["by_type"][key], resolved)
+    return ok(detail, meta=_lang_meta(resolved))
+
+
+# ── Stages ────────────────────────────────────────────────────────────────────
+
+@app.get("/stages", summary="Career + education timeline")
+@limiter.limit("30/minute")
+async def stages_list(
+    request: Request,
+    conn=Depends(db),
+    sub_type: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by sub_type: full_time | part_time | contract | freelance | intern "
+            "| university | school | bootcamp | online | exchange"
+        ),
+    ),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns the complete career and education timeline — every job, role,
+    degree, and course. Each stage includes:
+      - title, type, sub_type
+      - start_date / end_date  (ISO-8601)
+      - is_current flag
+      - skills: list of competencies applied or learned
+      - technologies: list of tools/frameworks used
+      - ext: typed extension (company_id, role, degree, field, etc.)
+      - url + source
+
+    Ordered newest-first. Filter by sub_type for just jobs or just education.
+    Use /stages/{id} for full detail with relations.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    stages = query_stages(conn, sub_type=sub_type)
+    stages = _localise_many(conn, stages, resolved)
+    return ok(
+        {"stages": stages, "count": len(stages)},
+        meta=_lang_meta(resolved),
+    )
+
+
+@app.get("/stages/{entity_id}", summary="Single career/education stage")
+@limiter.limit("60/minute")
+async def stage_detail(
+    request: Request,
+    entity_id: str,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Full detail for one career or education stage:
+      - All base fields + typed extension
+      - Skills and technologies (typed tags, not mixed with general tags)
+      - Related entities (company, institution, connected projects)
+    """
+    resolved = resolve_lang(lang, accept_language)
+    detail = query_stage_detail(conn, entity_id)
+    if not detail:
+        return err(f"Stage '{entity_id}' not found or not a professional/education entity", 404)
+    detail = _localise(conn, detail, resolved)
+    if detail.get("related"):
+        detail["related"] = _localise_many(conn, detail["related"], resolved)
+    return ok(detail, meta=_lang_meta(resolved))
+
+
+# ── Oeuvre ───────────────────────────────────────────────────────────────────
+
+@app.get("/oeuvre", summary="Side projects + literature")
+@limiter.limit("30/minute")
+async def oeuvre_list(
+    request: Request,
+    conn=Depends(db),
+    sub_type: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by sub_type: github_repo | blog_post | article | "
+            "book | podcast | open_source"
+        ),
+    ),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns all oeuvre: GitHub projects, blog posts, Medium articles,
+    books, podcasts. Each item includes:
+      - title, sub_type, description
+      - url (direct link to the work)
+      - source (github | medium | blog | manual)
+      - start_date (publish date or repo creation)
+      - skills: competencies this work demonstrates
+      - technologies: tools used or discussed
+      - ext: extended data (stars, forks, platform, etc.)
+
+    Use /oeuvre/{id} for full detail including related career stages.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    items = query_oeuvre(conn, sub_type=sub_type)
+    items = _localise_many(conn, items, resolved)
+    return ok(
+        {"oeuvre": items, "count": len(items)},
+        meta=_lang_meta(resolved),
+    )
+
+
+@app.get("/oeuvre/{entity_id}", summary="Single oeuvre item detail")
+@limiter.limit("60/minute")
+async def oeuvre_detail(
+    request: Request,
+    entity_id: str,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Full detail for one oeuvre item (project or article):
+      - All base fields + typed extension (stars, forks, platform, etc.)
+      - Skills demonstrated
+      - Technologies used
+      - Related career stages (e.g. built while working at VML)
+      - Source URL and any related URLs
+    """
+    resolved = resolve_lang(lang, accept_language)
+    detail = query_oeuvre_detail(conn, entity_id)
+    if not detail:
+        return err(f"Oeuvre item '{entity_id}' not found or not a project/literature entity", 404)
+    detail = _localise(conn, detail, resolved)
+    if detail.get("related"):
+        detail["related"] = _localise_many(conn, detail["related"], resolved)
+    if detail.get("related_stages"):
+        detail["related_stages"] = _localise_many(conn, detail["related_stages"], resolved)
+    return ok(detail, meta=_lang_meta(resolved))
