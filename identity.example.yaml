@@ -24,9 +24,9 @@ identity:
     people: 
       incoming: 
         someone_else_1: 
-          url: https://someoneelse.com/connect/?token=abc123
+          url: https://someoneelse.com/accept/?token=abc123
           category: "employee" # who are you to that person
       outgoing:
         someone_else_2:
-          url: https://someoneelse.com/accept/?token=def456
+          url: https://someoneelse.com/connect/?token=def456
           category: "fan" # wo are you to that person
