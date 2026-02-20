@@ -129,12 +129,18 @@ stages:
 
 Medium does not allow scraping your complete story list. To consider all your Medium articles, scroll to the end of your list of stories (https://medium.com/me/stories?tab=posts-published) and then open the DOM inspector. Copy the top node (<html>) and past it in a file (e.g., `data/Medium.html`). Then use the `medium_raw` connector to extract all articles from this file.
 
-**Important**: The `medium_raw` connector extracts article URLs and metadata from the saved HTML profile page, but **Medium blocks automated content fetching** (403 Forbidden). This means:
-- ✓ You get: Article titles, URLs, and publication dates
-- ✗ You don't get: Full article content for LLM processing
-- **Recommended alternative**: Use the `rss` connector (see below) which includes article summaries/content for the ~10 most recent posts
+The scraper will:
+1. Extract article URLs, titles, and dates from the saved HTML
+2. Fetch each article's full content using a **headless browser** (bypasses Cloudflare protection)
+3. Create a YAML cache at `data/Medium.html.yaml` for manual editing
 
-The scraper creates a YAML cache at `data/Medium.html.yaml` for manual editing, which will be used for future runs to avoid re-parsing the HTML file.
+**Prerequisites**: Install Playwright for headless browser support:
+```bash
+pip install playwright
+playwright install chromium
+```
+
+The YAML cache will be used for future runs to avoid re-parsing the HTML file and re-fetching articles.
 
 ```yaml
   medium_raw: # can be named anything, but the `connector` must be `medium_raw`
@@ -142,20 +148,18 @@ The scraper creates a YAML cache at `data/Medium.html.yaml` for manual editing, 
     enabled: true
     url: file://data/Medium.html
     sub_type_override: article
-    limit: 0  # 0 = all available
-    cache_ttl_hours: 168  # 7 days
-    llm-processing: true
-    fetch_content: false  # Medium blocks automated access (403 Forbidden)
-```
-
-For incremental updates **with full article content**, you can switch to the `rss` connector. The RSS feed includes article summaries/content and will work for LLM processing, but it will only consider the ~10 most recent articles from the RSS feed.
+    limit: 0  # 0 = all, you can optionally use the `rss` connector, but it will only consider the ~10 most recent articles from the RSS feed.
 
 ```yaml
-  medium_rss: # can be named anything, but the `connector` must be `rss`
+  medium_rss: # Optional: for incremental updates only
     connector: rss
-    enabled: true
+    enabled: false
     url: https://medium.com/feed/@nickyreinert
     sub_type_override: article
+    limit: 0  # 0 = all available (RSS typically has ~10 most recent)
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+```
     limit: 0  # 0 = all available (RSS typically has ~10 most recent)
     cache_ttl_hours: 168  # 7 days
     llm-processing: true
@@ -193,19 +197,43 @@ You can also add any RSS/Atom feed as source. The parser will extract metadata a
     llm-processing: true
 ```
 
-### Generic HTML Scraper
+### Sitemap Scraper
 
-You can also add any public webpage with a list of your works as source. The scraper will extract metadata and content, which can be enriched with LLM to create a more detailed description of the article and extract `technologies`, `skills` and `tags`.
+You can add any website with a sitemap.xml as a source. A sitemap usually indicates a couple of seperated projects. 
 
+**Mode 1: Multi-entity** (each page = separate entity)
 ```yaml
-  my_publications: # can be named anything
+  my_blog:
     connector: sitemap
     enabled: true
-    url: https://mypublications.com/sitemap.xml
-    sub_type_override: publication
-    limit: 0  # 0 = all available
-    cache_ttl_hours: 168  # 7 days
+    url: https://myblog.com/sitemap.xml
+    sub_type_override: blog_post
+    limit: 0                    # 0 = all, otherwise integer limit
+    cache_ttl_hours: 168        # 7 days
     llm-processing: true
+    single-entity: false        # Each page becomes a separate entity (default)
+    
+    connector-setup:
+      post-title-selector: h1
+      post-content-selector: article
+      post-published-date-selector: 'time[datetime]'
+      post-description-selector: 'meta[name="description"]'
+```
+
+**Mode 2: Single-entity** (whole site = one entity)
+```yaml
+  my_project_website:
+    connector: sitemap
+    enabled: true
+    url: https://myproject.com/sitemap.xml
+    sub_type_override: website
+    llm-processing: true
+    single-entity: true         # Treat entire site as one entity
+    
+    connector-setup:
+      post-title-selector: h1
+      post-content-selector: main
+      post-description-selector: 'meta[name="description"]'
 ```
 
 ### Static Manual Data
@@ -331,7 +359,7 @@ oeuvre_sources:
 | `github_api` | GitHub repos via API | `url: https://api.github.com/users/USERNAME/repos` |
 | `rss` | RSS/Atom feeds | `url: https://example.com/feed.xml` |
 | `medium_raw` | Raw HTML dump of Medium profile (bypasses Cloudflare) | `url: file://data/Medium.html` |
-| `sitemap` | Scrape URLs from sitemap.xml | `url: https://example.com/sitemap.xml` |
+| `sitemap` | Scrape URLs from sitemap.xml (multi-entity or single-entity mode) | `url: https://example.com/sitemap.xml`<br/>`single-entity: false` |
 | `manual` | Manual JSON data entry | `url: file://path/to/data.json` |
 
 **Note on Medium:** The `medium_raw` connector extracts **all articles** from a saved HTML copy of your Medium profile page, while `rss` only gets the ~10 most recent posts from the RSS feed.

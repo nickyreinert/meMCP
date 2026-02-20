@@ -3,11 +3,18 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 from .base import BaseScraper
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 log = logging.getLogger("mcp.scrapers.sitemap")
 
 class SitemapScraper(BaseScraper):
-    """Scraper that parses sitemap.xml and scrapes each URL with configurable selectors."""
+    """
+    Scraper that parses sitemap.xml.
+    
+    Modes:
+      - single_entity=True: Treats entire site as single entity (uses frontpage only)
+      - single_entity=False: Treats each page as separate entity (default)
+    """
 
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
         url = self.config.get("url")
@@ -15,10 +22,77 @@ class SitemapScraper(BaseScraper):
             log.error(f"Missing URL for source {self.name}")
             return []
 
+        single_entity = self.config.get("single-entity", False)
         settings = self.config.get("connector-setup", {})
-
+        
+        # Single entity mode: treat whole site as one entity
+        if single_entity:
+            log.info(f"Single-entity mode: fetching frontpage from sitemap domain")
+            return self._run_single_entity_mode(url, settings, force)
+        
+        # Multi-entity mode: each page is a separate entity
+        return self._run_multi_entity_mode(url, settings, force)
+    
+    def _run_single_entity_mode(self, sitemap_url: str, settings: Dict[str, Any], force: bool) -> List[Dict[str, Any]]:
+        """Treat the whole site as a single entity using frontpage content."""
+        # Extract base URL from sitemap URL
+        parsed = urlparse(sitemap_url)
+        frontpage_url = f"{parsed.scheme}://{parsed.netloc}/"
+        
+        # Check if we should fetch
+        if not self.should_fetch(frontpage_url, force):
+            log.info(f"Skipping {frontpage_url} (already cached)")
+            return []
+        
+        log.info(f"Fetching frontpage: {frontpage_url}")
+        
+        html = self._fetch_url(frontpage_url)
+        if not html:
+            log.error(f"Failed to fetch frontpage: {frontpage_url}")
+            return []
+        
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # Extract title
+        title_sel = settings.get("post-title-selector", "title")
+        title_el = soup.select_one(title_sel)
+        title = title_el.get_text(strip=True) if title_el else parsed.netloc
+        
+        # Extract description
+        content_sel = settings.get("post-content-selector", "body")
+        content_el = soup.select_one(content_sel)
+        description = content_el.get_text(separator=" ", strip=True)[:5000] if content_el else ""
+        
+        # Meta description overlay
+        desc_sel = settings.get("post-description-selector", 'meta[name="description"]')
+        meta = soup.select_one(desc_sel)
+        if meta and meta.get("content"):
+            description = meta.get("content")
+        
+        # Check sitemap for page count (metadata)
+        sitemap_urls = self._fetch_sitemap(sitemap_url)
+        page_count = len(sitemap_urls)
+        
+        return [{
+            "flavor": "oeuvre",
+            "category": self.config.get("sub_type_override", "website"),
+            "title": title,
+            "url": frontpage_url,
+            "source": self.name,
+            "source_url": frontpage_url,
+            "description": description,
+            "ext": {
+                "platform": self.name,
+                "sitemap_url": sitemap_url,
+                "page_count": page_count,
+                "single_entity_mode": True
+            }
+        }]
+    
+    def _run_multi_entity_mode(self, url: str, settings: Dict[str, Any], force: bool) -> List[Dict[str, Any]]:
+        """Each page in sitemap becomes a separate entity."""
         # 1. Fetch and parse sitemap.xml
-        log.info(f"Fetching sitemap from {url}")
+        log.info(f"Multi-entity mode: fetching sitemap from {url}")
         sitemap_urls = self._fetch_sitemap(url)
         if not sitemap_urls:
             log.warning(f"No URLs found in sitemap {url}")

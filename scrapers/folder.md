@@ -42,8 +42,12 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 
 ### Sitemap (`sitemap`)
 - Parses sitemap.xml files
-- Fetches each URL with basic HTTP
-- Works for static sites
+- Two modes:
+  - **Multi-entity mode** (`single-entity: false`): Each page becomes separate entity
+  - **Single-entity mode** (`single-entity: true`): Whole site as one entity (uses frontpage)
+- Fetches pages with basic HTTP
+- Configurable CSS selectors for content extraction
+- Works for static sites and blogs
 
 ### Manual (`manual`)
 - Custom HTML scraping with CSS selectors

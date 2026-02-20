@@ -3,7 +3,7 @@ scrapers/medium_raw.py — Medium Raw HTML Parser
 ================================================
 Parses a raw HTML dump of Medium profile page to extract all published articles.
 Extracts article links, titles, and publication dates from DOM structure.
-Optionally fetches full article content from URLs for LLM processing.
+Fetches full article content from URLs using headless browser (bypasses Cloudflare).
 
 YAML Caching:
 - First run: Parses HTML → creates `<file>.yaml` cache
@@ -12,6 +12,7 @@ YAML Caching:
 
 Depends on:
 - BeautifulSoup4 for HTML parsing
+- Playwright for headless browser (pip install playwright && playwright install)
 - base.BaseScraper for common functionality
 """
 
@@ -26,6 +27,14 @@ from bs4 import BeautifulSoup
 from .base import BaseScraper
 
 log = logging.getLogger("mcp.scrapers.medium_raw")
+
+# Check if Playwright is available
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    log.warning("Playwright not installed. Install with: pip install playwright && playwright install")
 
 
 class MediumRawScraper(BaseScraper):
@@ -258,14 +267,14 @@ class MediumRawScraper(BaseScraper):
             
             # Fetch article content if enabled
             description = ""
-            fetch_content = self.config.get("fetch_content", False)  # Default: false (Medium blocks automated access)
+            fetch_content = self.config.get("fetch_content", True)  # Default: true (uses headless browser)
             if fetch_content:
                 log.debug(f"Fetching content for: {article_url}")
                 description = self._fetch_article_content(article_url)
                 if description:
                     log.debug(f"  Retrieved {len(description)} chars")
                 else:
-                    log.warning(f"  Failed to fetch content (Medium likely blocked request)")
+                    log.warning(f"  Failed to fetch content for {article_url}")
                 # Rate limiting to avoid overwhelming Medium's servers
                 time.sleep(2)
             
@@ -296,7 +305,8 @@ class MediumRawScraper(BaseScraper):
     
     def _fetch_article_content(self, url: str) -> str:
         """
-        Fetch article content from Medium URL.
+        Fetch article content from Medium URL using headless browser.
+        This bypasses Medium's Cloudflare protection.
         
         Args:
             url: Article URL
@@ -304,64 +314,67 @@ class MediumRawScraper(BaseScraper):
         Returns:
             Article content text (or empty string if failed)
         """
-        try:
-            # Medium requires realistic browser headers to avoid 403 Forbidden
-            import requests
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0',
-            }
-            
-            # Fetch with browser-like headers
-            response = requests.get(url, headers=headers, timeout=15)
-            response.raise_for_status()
-            html = response.text
-            
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Medium article content is typically in <article> tag
-            article_tag = soup.find('article')
-            if article_tag:
-                # Extract text from paragraphs
-                paragraphs = article_tag.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-                content_parts = []
-                
-                for p in paragraphs:
-                    text = p.get_text(strip=True)
-                    if text and len(text) > 10:  # Skip very short fragments
-                        content_parts.append(text)
-                
-                # Join with newlines and limit size for LLM processing
-                content = '\n\n'.join(content_parts)
-                max_chars = 15000  # Reasonable limit for LLM context
-                if len(content) > max_chars:
-                    content = content[:max_chars] + "\n\n[Content truncated...]"
-                
-                return content
-            
-            # Fallback: try to find main content div
-            main_content = soup.find('div', class_=re.compile(r'article|post-content|entry-content'))
-            if main_content:
-                text = main_content.get_text(strip=True)
-                if len(text) > 15000:
-                    text = text[:15000] + "\n\n[Content truncated...]"
-                return text
-            
-            log.debug(f"Could not extract content structure from {url}")
+        if not PLAYWRIGHT_AVAILABLE:
+            log.warning("Playwright not available - cannot fetch article content. Install with: pip install playwright && playwright install")
             return ""
-            
+        
+        try:
+            with sync_playwright() as p:
+                # Launch headless browser
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
+                page = context.new_page()
+                
+                # Navigate to article
+                log.debug(f"Loading article with headless browser: {url}")
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                
+                # Wait for article content to load
+                page.wait_for_selector('article', timeout=10000)
+                
+                # Get page content
+                html = page.content()
+                browser.close()
+                
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Medium article content is typically in <article> tag
+                article_tag = soup.find('article')
+                if article_tag:
+                    # Extract text from paragraphs
+                    paragraphs = article_tag.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                    content_parts = []
+                    
+                    for p in paragraphs:
+                        text = p.get_text(strip=True)
+                        if text and len(text) > 10:  # Skip very short fragments
+                            content_parts.append(text)
+                    
+                    # Join with newlines and limit size for LLM processing
+                    content = '\n\n'.join(content_parts)
+                    max_chars = 15000  # Reasonable limit for LLM context
+                    if len(content) > max_chars:
+                        content = content[:max_chars] + "\n\n[Content truncated...]"
+                    
+                    log.debug(f"Extracted {len(content)} chars from article")
+                    return content
+                
+                # Fallback: try to find main content div
+                main_content = soup.find('div', class_=re.compile(r'article|post-content|entry-content'))
+                if main_content:
+                    text = main_content.get_text(strip=True)
+                    if len(text) > 15000:
+                        text = text[:15000] + "\n\n[Content truncated...]"
+                    return text
+                
+                log.debug(f"Could not extract content structure from {url}")
+                return ""
+                
         except Exception as e:
-            log.debug(f"Failed to fetch article content from {url}: {e}")
+            log.warning(f"Failed to fetch article content from {url}: {e}")
             return ""
     
     def _extract_title_from_url(self, url: str) -> str:

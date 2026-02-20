@@ -127,19 +127,36 @@ oeuvre_sources:
     llm-processing: true
     limit: 0                    # 0 = all, otherwise integer limit on number of posts to fetch
 
-  # Example: Sitemap connector - Parses sitemap.xml and scrapes each URL
-  # blog_sitemap:
+  # Example: Sitemap connector
+  # Mode 1: Multi-entity (each page = separate entity)
+  # blog_sitemap_pages:
   #   enabled: false
   #   connector: sitemap
   #   url: https://example.com/sitemap.xml
+  #   sub_type_override: blog_post
   #   limit: 20                  # Process only first 20 URLs from sitemap
   #   cache_ttl_hours: 336       # 14 days cache TTL
   #   llm-processing: true
+  #   single-entity: false       # Each page becomes a separate entity (default)
   #
   #   connector-setup:
   #     post-title-selector: h1
   #     post-content-selector: article
   #     post-published-date-selector: 'time[datetime]'
+  #     post-description-selector: 'meta[name="description"]'
+  
+  # Mode 2: Single-entity (whole site = one entity)
+  # project_website:
+  #   enabled: false
+  #   connector: sitemap
+  #   url: https://example.com/sitemap.xml
+  #   sub_type_override: website
+  #   llm-processing: true
+  #   single-entity: true        # Treat entire site as one entity
+  #
+  #   connector-setup:
+  #     post-title-selector: h1
+  #     post-content-selector: main
   #     post-description-selector: 'meta[name="description"]'
 
 # ── Internationalization (i18n) ──────────────────────────────────────────────
