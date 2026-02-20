@@ -344,8 +344,12 @@ def main():
         
         # ── YAML EXPORT (optional, for manual editing workflow) ─────────────
         # Note: Stages are auto-exported to <pdf_path>.yaml cache during parsing
-        # Only export oeuvre sources here
+        # Sources with YAML sync (medium_raw, linkedin_pdf) don't need separate export
+        # Only export oeuvre sources that don't have their own YAML caches
         if args.export_yaml or config.get("auto_export_yaml", False):
+            # Get sources that already have YAML caches (use new sync system)
+            sources_with_yaml_cache = {scraper.name for scraper, _ in scrapers_with_yaml}
+            
             log.info("Exporting oeuvre entities to YAML...")
             from scrapers.yaml_exporter import export_to_yaml
             
@@ -356,6 +360,11 @@ def main():
                     continue
                 
                 if not source_cfg.get("enabled", True):
+                    continue
+                
+                # Skip sources that already use YAML sync (they have their own .yaml cache)
+                if source_name in sources_with_yaml_cache:
+                    log.debug(f"Skipping export for {source_name} (uses YAML sync)")
                     continue
                 
                 yaml_file = Path(f"data/{source_name}_export.yaml")
