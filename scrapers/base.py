@@ -122,6 +122,9 @@ class ScraperFactory:
         elif connector == "sitemap":
             from .sitemap import SitemapScraper
             return SitemapScraper(name, config, db_path, llm=llm)
+        elif connector == "html":
+            from .html import HTMLScraper
+            return HTMLScraper(name, config, db_path, llm=llm)
         elif connector == "medium_raw":
             from .medium_raw import MediumRawScraper
             return MediumRawScraper(name, config, db_path, llm=llm)

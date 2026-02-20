@@ -1,9 +1,34 @@
+"""
+scrapers/sitemap.py — Sitemap XML Parser
+==========================================
+Parses sitemap.xml files to extract URLs and scrape page content.
+
+Modes:
+- single_entity=True: Treats entire site as single entity (uses frontpage only)
+- single_entity=False: Treats each page as separate entity (default)
+
+YAML Cache Workflow:
+- If cache-file exists: Load from cache, skip fetching
+- If LLM fields empty + LLM enabled: Flag for LLM reprocessing
+- If cache-file missing: Fetch and save to cache file
+- Manual editing: Edit cache file to refine content (preserved across runs)
+
+Depends on:
+- BeautifulSoup4 for HTML parsing
+- base.BaseScraper for common functionality
+- yaml_sync module for bidirectional YAML ↔ DB synchronization
+"""
+
 import logging
 import xml.etree.ElementTree as ET
-import yaml
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .base import BaseScraper
+from .yaml_sync import (
+    load_yaml_with_metadata,
+    save_yaml_atomic,
+    needs_reload
+)
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
@@ -11,16 +36,15 @@ log = logging.getLogger("mcp.scrapers.sitemap")
 
 class SitemapScraper(BaseScraper):
     """
-    Scraper that parses sitemap.xml.
-    
-    Modes:
-      - single_entity=True: Treats entire site as single entity (uses frontpage only)
-      - single_entity=False: Treats each page as separate entity (default)
+    Scraper that parses sitemap.xml and scrapes multiple pages.
+    Each page in sitemap becomes a separate entity (multi-entity only).
     
     Cache File Workflow:
       - If cache-file exists: Load from cache, skip fetching
       - If LLM fields empty + LLM enabled: Flag for LLM reprocessing
       - If cache-file missing: Fetch and save to cache file
+    
+    For single-page scraping, use the 'html' connector instead.
     """
 
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
@@ -29,9 +53,15 @@ class SitemapScraper(BaseScraper):
             log.error(f"Missing URL for source {self.name}")
             return []
 
-        single_entity = self.config.get("single-entity", False)
         settings = self.config.get("connector-setup", {})
         cache_file = self.config.get("cache-file")
+        
+        # Set yaml_cache_path for ingest.py integration
+        if cache_file:
+            if cache_file.startswith("file://"):
+                self.yaml_cache_path = Path(cache_file[7:])
+            else:
+                self.yaml_cache_path = Path(cache_file)
         
         # Check if cache file exists and should be used
         if cache_file and not force:
@@ -40,75 +70,15 @@ class SitemapScraper(BaseScraper):
                 log.info(f"Loaded {len(cached_entities)} entities from cache file")
                 return cached_entities
         
-        # Single entity mode: treat whole site as one entity
-        if single_entity:
-            log.info(f"Single-entity mode: fetching frontpage from sitemap domain")
-            entities = self._run_single_entity_mode(url, settings, force)
-        else:
-            # Multi-entity mode: each page is a separate entity
-            entities = self._run_multi_entity_mode(url, settings, force)
+        # Parse sitemap and scrape all pages (multi-entity mode)
+        entities = self._run_multi_entity_mode(url, settings, force)
         
         # Save to cache file if specified
         if cache_file and entities:
             self._save_to_cache(cache_file, entities)
+            log.info(f"✓ Cache file updated: {self.yaml_cache_path}")
         
         return entities
-    
-    def _run_single_entity_mode(self, sitemap_url: str, settings: Dict[str, Any], force: bool) -> List[Dict[str, Any]]:
-        """Treat the whole site as a single entity using frontpage content."""
-        # Extract base URL from sitemap URL
-        parsed = urlparse(sitemap_url)
-        frontpage_url = f"{parsed.scheme}://{parsed.netloc}/"
-        
-        # Check if we should fetch
-        if not self.should_fetch(frontpage_url, force):
-            log.info(f"Skipping {frontpage_url} (already cached)")
-            return []
-        
-        log.info(f"Fetching frontpage: {frontpage_url}")
-        
-        html = self._fetch_url(frontpage_url)
-        if not html:
-            log.error(f"Failed to fetch frontpage: {frontpage_url}")
-            return []
-        
-        soup = BeautifulSoup(html, "html.parser")
-        
-        # Extract title
-        title_sel = settings.get("post-title-selector", "title")
-        title_el = soup.select_one(title_sel)
-        title = title_el.get_text(strip=True) if title_el else parsed.netloc
-        
-        # Extract description
-        content_sel = settings.get("post-content-selector", "body")
-        content_el = soup.select_one(content_sel)
-        description = content_el.get_text(separator=" ", strip=True)[:5000] if content_el else ""
-        
-        # Meta description overlay
-        desc_sel = settings.get("post-description-selector", 'meta[name="description"]')
-        meta = soup.select_one(desc_sel)
-        if meta and meta.get("content"):
-            description = meta.get("content")
-        
-        # Check sitemap for page count (metadata)
-        sitemap_urls = self._fetch_sitemap(sitemap_url)
-        page_count = len(sitemap_urls)
-        
-        return [{
-            "flavor": "oeuvre",
-            "category": self.config.get("sub_type_override", "website"),
-            "title": title,
-            "url": frontpage_url,
-            "source": self.name,
-            "source_url": frontpage_url,
-            "description": description,
-            "ext": {
-                "platform": self.name,
-                "sitemap_url": sitemap_url,
-                "page_count": page_count,
-                "single_entity_mode": True
-            }
-        }]
     
     def _run_multi_entity_mode(self, url: str, settings: Dict[str, Any], force: bool) -> List[Dict[str, Any]]:
         """Each page in sitemap becomes a separate entity."""
@@ -239,12 +209,21 @@ class SitemapScraper(BaseScraper):
             }
         }
     
-    def _load_from_cache(self, cache_file: str) -> List[Dict[str, Any]]:
+    def _load_from_cache(
+        self,
+        cache_file: str
+    ) -> Optional[List[Dict[str, Any]]]:
         """
-        Load entities from cache file.
+        Load entities from YAML cache using yaml_sync module.
         
         Returns None if cache doesn't exist or is invalid.
         Checks if LLM reprocessing is needed based on empty classification fields.
+        
+        Args:
+            cache_file: Path to cache file (file:// URL or path string)
+        
+        Returns:
+            List of entity dictionaries or None if cache invalid/missing
         """
         if cache_file.startswith("file://"):
             file_path = cache_file[7:]
@@ -256,12 +235,8 @@ class SitemapScraper(BaseScraper):
             log.debug(f"Cache file not found: {cache_path}")
             return None
         
-        try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-        except Exception as e:
-            log.error(f"Failed to parse cache file {cache_path}: {e}")
-            return None
+        # Load with metadata tracking
+        metadata, data = load_yaml_with_metadata(cache_path)
         
         if not data or "entities" not in data:
             log.warning(f"Invalid cache structure: missing 'entities' key in {cache_path}")
@@ -289,26 +264,71 @@ class SitemapScraper(BaseScraper):
                     # Mark for LLM reprocessing by setting flag
                     entity["needs_llm_enrichment"] = True
                     log.debug(f"Entity '{entity.get('title')}' needs LLM enrichment")
+                else:
+                    # Has LLM enrichment
+                    entity["llm_enriched"] = 1
+                    entity["llm_model"] = entity.get("llm_model")
+                    entity["llm_enriched_at"] = entity.get("llm_enriched_at")
+            
+            # Include entity_id if present (for DB sync)
+            if "entity_id" in entity:
+                entity["id"] = entity["entity_id"]
             
             results.append(entity)
         
-        log.info(f"Loaded {len(results)} entities from cache: {cache_path.name}")
+        last_synced = metadata.get('last_synced', 'never') if metadata else 'never'
+        log.info(f"Loaded {len(results)} entities from cache: {cache_path.name} (last_synced: {last_synced})")
         return results
     
     def _save_to_cache(self, cache_file: str, entities: List[Dict[str, Any]]):
-        """Save entities to cache file in YAML format."""
+        """
+        Save entities to YAML cache using yaml_sync module (atomic write).
+        
+        Args:
+            cache_file: Path to cache file (file:// URL or path string)
+            entities: List of entity dictionaries to save
+        """
         if cache_file.startswith("file://"):
             file_path = cache_file[7:]
         else:
             file_path = cache_file
         
         cache_path = Path(file_path)
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
         
-        try:
-            data = {"entities": entities}
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            log.info(f"Saved {len(entities)} entities to cache: {cache_path}")
-        except Exception as e:
-            log.error(f"Failed to save cache file {cache_path}: {e}")
+        # Convert entities to clean YAML format
+        yaml_entities = []
+        for entity in entities:
+            yaml_entity = {
+                "title": entity.get("title"),
+                "url": entity.get("url"),
+                "description": entity.get("description", ""),
+                "published_at": entity.get("published_at"),
+            }
+            
+            # Include entity_id if present (for DB sync)
+            if "id" in entity:
+                yaml_entity["entity_id"] = entity["id"]
+            
+            # Include LLM fields if present
+            if entity.get("technologies"):
+                yaml_entity["technologies"] = entity["technologies"]
+            if entity.get("skills"):
+                yaml_entity["skills"] = entity["skills"]
+            if entity.get("tags"):
+                yaml_entity["tags"] = entity["tags"]
+            if entity.get("llm_enriched"):
+                yaml_entity["llm_enriched"] = True
+                yaml_entity["llm_model"] = entity.get("llm_model")
+                yaml_entity["llm_enriched_at"] = entity.get("llm_enriched_at")
+            
+            # Include ext metadata
+            if entity.get("ext"):
+                yaml_entity["ext"] = entity["ext"]
+            
+            yaml_entities.append(yaml_entity)
+        
+        yaml_data = {"entities": yaml_entities}
+        
+        # Use atomic save from yaml_sync
+        save_yaml_atomic(cache_path, yaml_data, self.name)
+        log.info(f"Saved {len(yaml_entities)} entities to cache: {cache_path}")
