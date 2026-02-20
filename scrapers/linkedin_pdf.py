@@ -44,7 +44,7 @@ class LinkedInPDFParser:
             raise ValueError(
                 "LLM enricher required for PDF parsing. "
                 "PDF text extraction works without LLM, but structured data extraction needs LLM. "
-                "Either provide llm_enricher or use linkedin_export.yaml instead."
+                "Either provide llm_enricher or use the pre-generated <pdf_path>.yaml cache instead."
             )
 
     def _extract_text(self) -> str:

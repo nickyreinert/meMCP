@@ -11,7 +11,7 @@ Purpose:
 
 Usage:
   from scrapers.yaml_exporter import export_to_yaml
-  export_to_yaml(db_path, "linkedin_export.yaml", source="linkedin")
+  export_to_yaml(db_path, "medium_export.yaml", source="medium")
   export_to_yaml(db_path, "medium_export.yaml", source="medium")
 """
 

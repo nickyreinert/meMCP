@@ -194,18 +194,6 @@ class Seeder:
 
             conn.commit()
 
-            # Export stages template if configured
-            stages_config = self.config.get("stages", {})
-            if stages_config.get("export_template"):
-                from .stages_template_generator import export_stages_template
-
-                stages_items = [i for i in raw_items if i.get("type") in
-                                ("professional", "company", "education", "institution", "achievement")]
-
-                if stages_items:
-                    output_path = Path("stages_template.json")
-                    export_stages_template(stages_items, output_path)
-
             log.info("Seeding complete")
         except Exception as e:
             conn.rollback()

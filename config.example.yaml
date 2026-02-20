@@ -63,16 +63,21 @@ static: llm.yaml
 
 # ── Stages (WHERE you worked/studied) ──────────────────────────
 # Stages are companies, institutions, professional roles, education, certifications
-# source_type:
-#   - linkedin_export: YAML file from LinkedIn (use scripts/linkedin_to_json.py to convert PDF)
-#   - linkedin_pdf: Direct PDF parsing (requires LLM, skipped when using --disable-llm)
-#   - manual_json: Hand-edited JSON file
-# source_path: Path to the export file
-# export_template: If true, creates stages_template.json after parsing for manual editing
+#
+# Workflow:
+#   1. First run: Parses PDF using LLM → creates linkedin_profile.pdf.yaml cache
+#   2. Manual editing: Edit linkedin_profile.pdf.yaml to refine content
+#   3. Subsequent runs: Loads from .yaml cache (fast, no LLM needed)
+#   4. Disable: Set enabled=false to skip stages processing entirely
+#
+# source_path: Path to LinkedIn profile PDF export
+#   - If <source_path>.yaml exists → loads from YAML (user-edited cache)
+#   - If <source_path>.yaml missing → parses PDF with LLM and saves YAML
+#
 stages:
-  source_type: linkedin_pdf       # or "linkedin_export" or "manual_json"
+  enabled: true                      # Set false to skip stages processing
+  source_type: linkedin_pdf          # Only linkedin_pdf supported (auto-caching to YAML)
   source_path: linkedin_profile.pdf  # LinkedIn export PDF file
-  export_template: true              # Generate stages_template.json
 
 # ── Sources for oeuvre ─────────────────────────────────────────────────
 # Configure the sources to fetch your data from. Each source can be enabled/disabled independently.

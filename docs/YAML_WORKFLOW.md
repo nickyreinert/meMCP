@@ -7,15 +7,15 @@ Consolidate data storage using **YAML files as manually editable caches** with d
 ### Architecture
 
 ```
-Manual Export (PDF/HTML) 
+PDF/HTML Export 
     ↓
-DB + YAML export (with entity_id)
+Parse → DB + Auto-generate YAML cache
     ↓
 Manual editing (YAML files)
     ↓
-Selective update (--yaml-update)
+Re-run ingestion (loads from YAML cache)
     ↓
-DB update with cascade (tags, skills, relations)
+OR: Selective update (--yaml-update for oeuvre sources)
 ```
 
 ## Files
@@ -24,19 +24,82 @@ DB update with cascade (tags, skills, relations)
 - `scrapers/yaml_exporter.py` — Export DB → YAML with entity_id
 - `scrapers/yaml_connector.py` — Parse YAML → entity dicts
 - `scrapers/seeder.py` — Added `update_entity()` + `update_from_yaml()` methods
+- `ingest.py` — Auto-generates `<pdf>.yaml` cache on first LinkedIn PDF parse
 
 ### Data Files
-- `data/linkedin_export.yaml` — LinkedIn/career data cache
-- `data/medium_export.yaml` — Medium articles cache (template created)
-- `data/<source>_export.yaml` — Generic pattern for any source
+- `linkedin_profile.pdf.yaml` — Auto-generated LinkedIn cache (edit this, not the PDF)
+- `data/medium_export.yaml` — Medium articles cache (created with --export-yaml)
+- `data/<source>_export.yaml` — Generic pattern for any oeuvre source
 
 ### Configuration
 - `config.yaml` — Added `auto_export_yaml: true` option
-- `ingest.py` — Added CLI args: `--yaml-update`, `--file`, `--id`, `--export-yaml`
+- `config.yaml` — Added `stages.enabled: true/false` to control LinkedIn processing
+- `ingest.py` — CLI args: `--yaml-update`, `--file`, `--id`, `--export-yaml`
 
-## Workflow
+## LinkedIn Stages Workflow
 
-### 1. Initial Scrape (PDF/HTML → DB + YAML)
+### First Run (PDF → YAML Cache)
+
+```bash
+# Parse LinkedIn PDF with LLM, creates linkedin_profile.pdf.yaml
+python ingest.py
+```
+
+**What happens:**
+1. Checks if `linkedin_profile.pdf.yaml` exists
+2. If not, parses `linkedin_profile.pdf` using LLM
+3. Creates `linkedin_profile.pdf.yaml` cache for manual editing
+4. Writes entities to DB
+
+### Manual Editing
+
+Edit `linkedin_profile.pdf.yaml`:
+```yaml
+experience:
+  - role: "Senior Data Analyst"      # Edit freely
+    company: "VML"
+    start_date: "2024-06"
+    end_date: null
+    description: "Updated description..."   # Edit description
+    tags: [Python, DataEngineering, GenAI]  # Add/remove tags
+
+education:
+  - institution: "University Name"
+    degree: "Bachelor of Science"
+    field: "Computer Science"
+    tags: [cs, math]
+
+certifications:
+  - name: "Certification Name"
+    issuer: "Issuing Org"
+    issued: "2021-03"
+```
+
+### Subsequent Runs (YAML → DB)
+
+```bash
+# Loads from linkedin_profile.pdf.yaml (fast, no LLM)
+python ingest.py
+```
+
+**What happens:**
+1. Checks if `linkedin_profile.pdf.yaml` exists
+2. If yes, loads from YAML instead of parsing PDF
+3. Updates DB with your manual edits
+
+### Disable Stages Processing
+
+After you're done editing, disable re-processing:
+
+```yaml
+# config.yaml
+stages:
+  enabled: false  # Skip LinkedIn stages entirely
+```
+
+## Oeuvre Sources Workflow (GitHub, Medium, Blogs)
+
+### 1. Initial Scrape (Source → DB + YAML)
 
 ```bash
 # Scrape content, write to DB, export to YAML files
@@ -44,7 +107,7 @@ python ingest.py --export-yaml
 ```
 
 **What happens:**
-- Scrapes configured sources (LinkedIn PDF, Medium HTML, RSS, etc.)
+- Scrapes configured oeuvre sources (Medium HTML, RSS, GitHub)
 - Writes entities to DB
 - Exports to `data/<source>_export.yaml` with `entity_id` added to each item
 - Creates manually editable cache files
@@ -53,22 +116,21 @@ python ingest.py --export-yaml
 
 Edit YAML files:
 ```yaml
-experience:
+articles:
   - entity_id: "abc-123-def-456"     # DO NOT modify (DB primary key)
-    role: "Senior Data Analyst"      # Edit freely
-    company: "VML"
-    start_date: "2024-06"
-    end_date: null
-    description: "Updated description..."   # Edit description
-    tags: [Python, DataEngineering, GenAI]  # Add/remove tags
-    skills: [DataAnalytics, LLM]            # Add/remove skills
+    title: "Article Title"           # Edit freely
+    url: "https://..."
+    published: "2024-01-15"
+    description: "Updated description..."
+    tags: [Python, AI, Tutorial]     # Add/remove tags
+    skills: [GPT4, LangChain]        # Add/remove skills
 ```
 
 **Editable fields:**
 - `title`, `description`
 - `tags`, `skills` (capability tags)
-- `start_date`, `end_date`
-- Extension fields (`location`, `remote`, etc.)
+- `published_date`
+- Extension fields
 
 **DO NOT modify:**
 - `entity_id` (it's the DB primary key)
@@ -77,27 +139,28 @@ experience:
 
 #### Update all entities in file:
 ```bash
-python ingest.py --yaml-update --file data/linkedin_export.yaml
+python ingest.py --yaml-update --file data/medium_export.yaml
 ```
 
 #### Update single entity by ID:
 ```bash
-python ingest.py --yaml-update --file data/linkedin_export.yaml --id abc-123-def-456
+python ingest.py --yaml-update --file data/medium_export.yaml --id abc-123-def-456
 ```
 
 #### Update with LLM enrichment:
 ```bash
 # Skip LLM enrichment (faster)
-python ingest.py --yaml-update --file data/linkedin_export.yaml --disable-llm
+python ingest.py --yaml-update --file data/medium_export.yaml --disable-llm
 
 # With LLM enrichment (default)
-python ingest.py --yaml-update --file data/linkedin_export.yaml
+python ingest.py --yaml-update --file data/medium_export.yaml
 ```
 
 **What happens (CASCADE updates):**
 1. Updates entity row (title, description, dates)
-2. Updates `ext_*` table (extensions like location, remote)
+2. Updates `ext_*` table (extensions)
 3. **Deletes old tags → inserts new tags** (with tag_type classification)
+
 4. **Deletes old relations → rebuilds relations** (company, institution, technologies)
 5. Updates nested projects (for professional entities)
 
@@ -172,26 +235,23 @@ When `update_entity()` runs, it:
 
 ## Platform-Specific Examples
 
-### LinkedIn Export
+### LinkedIn Export (Auto-generated Cache)
 ```yaml
-# data/linkedin_export.yaml
+# linkedin_profile.pdf.yaml
 experience:
-  - entity_id: "uuid-1"
-    role: "Senior Data Analyst"
+  - role: "Senior Data Analyst"
     company: "VML"
     start_date: "2024-06"
     end_date: null
     tags: [Python, SQL, GenAI]
-    skills: [DataAnalytics, ProjectManagement]
+    description: "..."
     projects:
-      - entity_id: "uuid-2"
-        title: "GenAI Document Automation"
+      - title: "GenAI Document Automation"
         description: "..."
         tags: [CopilotStudio, PowerAutomate]
 
 education:
-  - entity_id: "uuid-3"
-    institution: "University of Example"
+  - institution: "University of Example"
     degree: "MSc Data Science"
     ...
 ```
@@ -228,7 +288,8 @@ projects:
 ### Single Source of Truth
 - One YAML file per platform
 - DB is authoritative, YAML is editable cache
-- No duplicate templates (removed redundant stages_template.json usage)
+- Auto-caching for LinkedIn (first PDF parse creates YAML)
+- Manual export for oeuvre sources (--export-yaml)
 
 ### Manual Adjustment Control
 - Edit descriptions, tags, dates directly
@@ -257,9 +318,9 @@ auto_export_yaml: true  # Export after each ingestion
 ### Stages Source Configuration
 ```yaml
 stages:
-  source_type: linkedin_export  # Use YAML file
-  source_path: data/linkedin_export.yaml
-  export_template: false  # No need for JSON template anymore
+  enabled: true                      # Set false to skip LinkedIn processing
+  source_type: linkedin_pdf          # Parses PDF or loads from .yaml cache
+  source_path: linkedin_profile.pdf  # Auto-creates linkedin_profile.pdf.yaml
 ```
 
 ### Oeuvre Sources
@@ -294,11 +355,11 @@ python ingest.py --source medium --export-yaml
 
 ### YAML Update Mode
 ```bash
-# Update all entities from file
-python ingest.py --yaml-update --file data/linkedin_export.yaml
+# Update all entities from file (oeuvre sources)
+python ingest.py --yaml-update --file data/medium_export.yaml
 
 # Update single entity
-python ingest.py --yaml-update --file data/linkedin_export.yaml --id abc-123
+python ingest.py --yaml-update --file data/medium_export.yaml --id abc-123
 
 # Update without LLM enrichment (faster)
 python ingest.py --yaml-update --file data/medium_export.yaml --disable-llm
@@ -318,22 +379,23 @@ python ingest.py --llm-only --source medium --batch-size 20
 
 ## Migration Path
 
-### Old Workflow (Before)
+### Old Workflow (Before - Deprecated)
 1. LinkedIn PDF → stages_template.json (manual template)
-2. LinkedIn YAML → separate file
+2. LinkedIn YAML → separate file (linkedin_export.yaml)
 3. Manual JSON → another separate file
 4. Medium HTML → direct scrape, no cache
 
-### New Workflow (After)
-1. LinkedIn PDF → DB + `data/linkedin_export.yaml` (with IDs)
-2. Medium HTML → DB + `data/medium_export.yaml` (with IDs)
-3. Edit YAML → `--yaml-update` → DB cascade update
+### New Workflow (After - Current)
+1. LinkedIn PDF → `linkedin_profile.pdf.yaml` (auto-cache, re-usable)
+2. Medium HTML → DB + `data/medium_export.yaml` (with entity_id for manual editing)
+3. Edit YAML → Re-run `ingest.py` (LinkedIn) or `--yaml-update` (oeuvre sources)
 4. Single pattern for all platforms
 
 ### Deprecation
-- `stages_template.json` → Now optional (export_template: false recommended)
-- Direct PDF/HTML scraping → Still works, but exports to YAML for editability
-- Multiple LinkedIn files → Consolidated to `linkedin_export.yaml`
+- `stages_template.json` → Removed (use auto-generated .yaml cache)
+- `linkedin_export` source_type → Removed (use linkedin_pdf with auto-caching)
+- `manual_json` source_type → Removed (edit .yaml cache directly)
+- Direct PDF parsing → Now creates .yaml cache automatically
 
 ## Testing
 
@@ -355,7 +417,7 @@ python ingest.py --yaml-update --file data/medium_export.yaml
 ```bash
 # 1. Edit YAML: add new tag to entity
 # 2. Update entity
-python ingest.py --yaml-update --file data/linkedin_export.yaml --id <entity_id>
+python ingest.py --yaml-update --file data/medium_export.yaml --id <entity_id>
 # 3. Check DB: tags table has new tag with proper tag_type
 # 4. Check DB: relations table has new used_technology relation if tech tag
 ```

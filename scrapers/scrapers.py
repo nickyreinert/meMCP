@@ -394,7 +394,7 @@ class LinkedInParser:
     Parses a structured YAML export of LinkedIn data.
     LinkedIn cannot be scraped reliably — export via Settings → Data privacy.
 
-    Expected YAML structure: see linkedin_export.yaml.example
+    Expected YAML structure: see linkedin_profile.pdf.yaml (auto-generated cache)
     Produces entity dicts for: professional, company, education, institution, achievement.
 
     Can be initialized with either:

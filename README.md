@@ -1,4 +1,4 @@
-# Personal MCP Server
+# meMCP
 
 A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves your professional profile, projects, publications, and career data.
 
@@ -6,7 +6,7 @@ A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves y
 
 - Multi-language support (EN, DE)
 - Aggregates data from GitHub, Medium, RSS feeds, and LinkedIn
-- LLM-powered content enrichment
+- LLM-powered content extraction
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
 
@@ -21,21 +21,20 @@ pip install -r requirements.txt
 ### 2. Configure
 
 Edit `config.yaml` to set:
-- Your identity information
-- Admin token (for secure endpoints)
-- LLM backend (Groq or Ollama)
+- Your static identity information
+- LLM backend (Remote AI provider or locally, like **Ollama**)
 - Data sources (GitHub, Medium, blogs, etc.)
 
 ### 3. Ingest Data
 
 ```bash
-# Full ingestion (LinkedIn PDF + all sources with LLM enrichment)
+# Runs a full ingestion with all provided sources and utilizes LLM for content extraction
 python ingest.py
 
 # Force refresh (ignore cache)
 python ingest.py --force
 
-# Fast mode: fetch without LLM enrichment (skips PDF sources, use linkedin_export.yaml instead)
+# Fast mode: fetch without LLM enrichment (skips PDF sources, uses .yaml cache if available)
 python ingest.py --disable-llm
 
 # LLM-only mode: enrich existing entities (run after --disable-llm)
@@ -61,14 +60,53 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 Server will be available at: **http://localhost:8000**
 
-## Important Commands
+## Configuration
 
-### Data Management
+### Scraper Modules
 
-```bash
-# Full data ingestion (LinkedIn + all sources)
-python ingest.py
+#### LinkedIn
+
+LinkedIn does not allow to parse your profile. You need to export your profile page as PDF. The scraper usess LLM to extract structured data from the PDF. 
+It creates an YAML file in `data/linkedin_profile.pdf.yaml` that can be used for manual editing. If this file exists, the scraper will not run PDF extraction again.
+
+```yaml
+stages:
+  enabled: true                      # Set false to skip stages processing
+  source_type: linkedin_pdf          # Only linkedin_pdf supported (auto-caching to YAML)
+  source_path: linkedin_profile.pdf  # LinkedIn export PDF file
 ```
+
+#### Medium.com
+
+Medium does not allow scraping your complete story list. To consider all your Medium articles, scroll to the end of your list of stories (https://medium.com/me/stories?tab=posts-published) and then open the DOM inspector. Copy the top node (<html>) and past it in a file (e.g., `data/Medium.html`). Then use the `medium_raw` connector to extract all articles from this file.
+
+This will create a processed file `data/Medium.html.yaml` that can be used for manual editing and will be used for future runs to avoid re-parsing the HTML file, as long as this file exists.
+
+```yaml
+  medium_raw:
+    enabled: true
+    connector: medium_raw
+    url: file://data/Medium.html
+    sub_type_override: article
+    limit: 0  # 0 = all available
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+```
+
+For incremental updates, you can switch to the `rss` connector, but it will only consider the ~10 most recent articles from the RSS feed.
+
+
+```yaml
+  medium_rss:
+    enabled: true
+    connector: medium_raw
+    url: https://medium.com/feed/@nickyreinert
+    sub_type_override: article
+    limit: 0  # 0 = all available
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+```
+
 
 ### LLM Backend Setup
 
@@ -160,7 +198,8 @@ oeuvre_sources:
 
 - `db/profile.db` - SQLite database with all entities
 - `.cache/` - Cached API responses and scraped content
-- `stages_template.json` - Generated template for manual stage editing
+- `data/linkedin_profile.pdf.yaml` - Auto-generated YAML cache for manual LinkedIn profile editing
+- `data/<source>_export.yaml` - Exported entities by source for manual editing
 
 ## License
 

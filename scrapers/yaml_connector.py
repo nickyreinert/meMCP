@@ -7,10 +7,7 @@ Purpose:
   Manual editing workflow:
     1. Initial scrape → DB + YAML export (with entity_id)
     2. User edits YAML file
-    3. Run: python ingest.py --yaml-update --file linkedin_export.yaml [--id <entity_id>]
-    4. Updates DB with manual changes (cascade: tags, skills, relations)
-
-Features:
+    3. Run: python ingest.py --yaml-update --file <source>_export.yaml [--id <entity_id>]
   - Selective update: by entity_id or all entities in file
   - Cascade updates: automatically reprocesses tags, skills, relations
   - Generic: works with any platform (LinkedIn, Medium, GitHub, etc.)
@@ -29,7 +26,7 @@ class YamlConnector:
     """
     Generic YAML connector for manually edited entity files.
     
-    Expected YAML structure (similar to linkedin_export.yaml):
+    Expected YAML structure (similar to auto-generated caches):
       experience: [{entity_id, role, company, ...}, ...]
       education: [{entity_id, institution, degree, ...}, ...]
       certifications: [{entity_id, name, issuer, ...}, ...]
