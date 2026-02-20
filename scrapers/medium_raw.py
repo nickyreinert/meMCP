@@ -54,7 +54,7 @@ class MediumRawScraper(BaseScraper):
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
         """
         Parse the raw HTML file and extract all Medium articles.
-        Checks for YAML cache first, falls back to HTML parsing.
+        Uses YAML cache with sync detection (file mtime vs last_synced).
         
         Args:
             force: If True, re-process HTML even if YAML cache exists
@@ -81,81 +81,113 @@ class MediumRawScraper(BaseScraper):
         
         # Check for YAML cache
         yaml_cache_path = Path(str(html_path) + ".yaml")
+        self.yaml_cache_path = yaml_cache_path  # Expose for ingest.py
+        
+        # Determine if we need to reload
+        should_parse_html = force
         
         if yaml_cache_path.exists() and not force:
-            log.info(f"Loading Medium articles from YAML cache: {yaml_cache_path}")
-            return self._load_from_yaml(yaml_cache_path)
+            metadata, data = load_yaml_with_metadata(yaml_cache_path)
+            last_synced = metadata.get('last_synced') if metadata else None
+            
+            if needs_reload(yaml_cache_path, last_synced):
+                log.info(f"YAML cache was edited manually (file mtime > last_synced)")
+                log.info(f"Loading from YAML cache: {yaml_cache_path}")
+                return self._load_from_yaml(yaml_cache_path, metadata, data)
+            else:
+                # YAML not edited, load from cache
+                log.info(f"Loading from YAML cache: {yaml_cache_path}")
+                return self._load_from_yaml(yaml_cache_path, metadata, data)
+        else:
+            should_parse_html = True
         
-        # Parse HTML (first run or forced refresh)
-        log.info(f"Reading Medium HTML from {html_path}")
-        try:
-            content = html_path.read_text(encoding='utf-8')
-        except Exception as e:
-            log.error(f"Failed to read file {html_path}: {e}")
-            return []
-        
-        articles = self._parse_html(content)
-        
-        if articles:
-            # Create YAML cache for future runs and manual editing
-            log.info(f"Creating YAML cache for manual editing: {yaml_cache_path}")
-            self._save_to_yaml(articles, yaml_cache_path)
-            log.info(f"✓ YAML cache created at {yaml_cache_path}")
-            log.info(f"  → Edit this file manually, then re-run (will load from cache)")
-        
-        return articles
+        if should_parse_html:
+            # Parse HTML (first run or forced refresh)
+            log.info(f"Reading Medium HTML from {html_path}")
+            try:
+                content = html_path.read_text(encoding='utf-8')
+            except Exception as e:
+                log.error(f"Failed to read file {html_path}: {e}")
+                return []
+            
+            articles = self._parse_html(content)
+            
+            if articles:
+                # Create/update YAML cache
+                log.info(f"Saving to YAML cache: {yaml_cache_path}")
+                self._save_to_yaml(articles, yaml_cache_path)
+                log.info(f"✓ YAML cache saved (single source of truth)")
+                log.info(f"  → Edit this file manually to refine data")
+            
+            return articles
     
-    def _load_from_yaml(self, yaml_path: Path) -> List[Dict[str, Any]]:
+    def _load_from_yaml(
+        self,
+        yaml_path: Path,
+        metadata: Optional[Dict] = None,
+        data: Optional[Dict] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Load articles from YAML cache.
+        Load articles from YAML cache using yaml_sync module.
         
         Args:
             yaml_path: Path to YAML cache file
+            metadata: Pre-loaded metadata (optional)
+            data: Pre-loaded data (optional)
         
         Returns:
             List of article dictionaries
         """
-        try:
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-            
-            if not data or "articles" not in data:
-                log.error(f"Invalid YAML structure: missing 'articles' key in {yaml_path}")
-                return []
-            
-            articles = data.get("articles", [])
-            log.info(f"Loaded {len(articles)} articles from YAML cache")
-            
-            # Convert YAML format to internal entity format
-            results = []
-            for article in articles:
-                entity = {
-                    "flavor": "oeuvre",
-                    "category": "article",
-                    "sub_type": self.config.get("sub_type_override", "article"),
-                    "title": article.get("title", "Untitled"),
-                    "url": article.get("url", ""),
-                    "source": self.name,
-                    "source_url": article.get("url", ""),
-                    "description": article.get("description", ""),
-                    "published_at": article.get("published_at"),
-                    "ext": {
-                        "platform": "medium",
-                        "published_at": article.get("published_at"),
-                        "published_date_text": article.get("published_date_text"),
-                    }
-                }
-                results.append(entity)
-            
-            return results
-            
-        except Exception as e:
-            log.error(f"Failed to load YAML cache {yaml_path}: {e}")
+        if data is None:
+            metadata, data = load_yaml_with_metadata(yaml_path)
+        
+        if not data or "articles" not in data:
+            log.error(f"Invalid YAML structure: missing 'articles' key in {yaml_path}")
             return []
+        
+        articles = data.get("articles", [])
+        log.info(f"Loaded {len(articles)} articles from YAML cache")
+        
+        # Convert YAML format to internal entity format
+        results = []
+        for article in articles:
+            entity = {
+                "flavor": "oeuvre",
+                "category": "article",
+                "sub_type": self.config.get("sub_type_override", "article"),
+                "title": article.get("title", "Untitled"),
+                "url": article.get("url", ""),
+                "source": self.name,
+                "source_url": article.get("url", ""),
+                "description": article.get("description", ""),
+                "published_at": article.get("published_at"),
+                "technologies": article.get("technologies", []),
+                "skills": article.get("skills", []),
+                "tags": article.get("tags", []),
+                "ext": {
+                    "platform": "medium",
+                    "published_at": article.get("published_at"),
+                    "published_date_text": article.get("published_date_text"),
+                }
+            }
+            
+            # Include entity_id if present (for syncing back)
+            if "entity_id" in article:
+                entity["id"] = article["entity_id"]
+            
+            # Include LLM enrichment status
+            if article.get("llm_enriched"):
+                entity["llm_enriched"] = 1
+                entity["llm_model"] = article.get("llm_model")
+                entity["llm_enriched_at"] = article.get("llm_enriched_at")
+            
+            results.append(entity)
+        
+        return results
     
     def _save_to_yaml(self, articles: List[Dict[str, Any]], yaml_path: Path):
         """
-        Save articles to YAML cache for manual editing.
+        Save articles to YAML cache using yaml_sync module (atomic write).
         
         Args:
             articles: List of article dictionaries
@@ -164,23 +196,36 @@ class MediumRawScraper(BaseScraper):
         # Convert internal format to clean YAML format
         yaml_articles = []
         for article in articles:
-            yaml_articles.append({
+            yaml_article = {
                 "title": article.get("title"),
                 "url": article.get("url"),
                 "published_at": article.get("published_at"),
                 "published_date_text": article.get("ext", {}).get("published_date_text"),
                 "description": article.get("description", ""),
-            })
+            }
+            
+            # Include entity_id if present
+            if "id" in article:
+                yaml_article["entity_id"] = article["id"]
+            
+            # Include LLM fields if present
+            if article.get("technologies"):
+                yaml_article["technologies"] = article["technologies"]
+            if article.get("skills"):
+                yaml_article["skills"] = article["skills"]
+            if article.get("tags"):
+                yaml_article["tags"] = article["tags"]
+            if article.get("llm_enriched"):
+                yaml_article["llm_enriched"] = True
+                yaml_article["llm_model"] = article.get("llm_model")
+                yaml_article["llm_enriched_at"] = article.get("llm_enriched_at")
+            
+            yaml_articles.append(yaml_article)
         
-        yaml_data = {
-            "articles": yaml_articles
-        }
+        yaml_data = {"articles": yaml_articles}
         
-        try:
-            with open(yaml_path, 'w', encoding='utf-8') as f:
-                yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        except Exception as e:
-            log.error(f"Failed to save YAML cache to {yaml_path}: {e}")
+        # Use atomic save from yaml_sync
+        save_yaml_atomic(yaml_path, yaml_data, self.name)
     
     def _parse_html(self, content: str) -> List[Dict[str, Any]]:
         """

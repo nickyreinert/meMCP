@@ -3,17 +3,26 @@ scrapers/seeder.py — Simplified Entity Seeder
 =============================================
 Processes raw scraped data and stores in DB using simplified model.
 Handles LLM enrichment and tag extraction.
+
+YAML Sync Integration:
+- After DB insertion, updates YAML cache with entity_id
+- After LLM enrichment, updates YAML cache with enriched fields
+- Supports bidirectional sync (YAML ↔ DB)
 """
 
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 
 from db.models import (
     DB_PATH, get_db, init_db, upsert_entity
 )
 from llm.enricher import LLMEnricher
+from scrapers.yaml_sync import (
+    update_yaml_after_db_insert,
+    update_yaml_after_llm
+)
 
 log = logging.getLogger("mcp.seeder")
 
@@ -65,24 +74,68 @@ class Seeder:
         self.config = config or {}
         self._seen_titles: set[str] = set()
 
-    def seed_all(self, raw_items: list[dict], owner_cfg: dict, enrich_llm: bool = True):
+    def seed_all(
+        self,
+        raw_items: list[dict],
+        owner_cfg: dict,
+        enrich_llm: bool = True,
+        yaml_path: Optional[Path] = None,
+        source_name: Optional[str] = None
+    ) -> Dict[str, str]:
         """
         Main entry point. Pass ALL scraped items from all sources.
-        Set enrich_llm=False to skip LLM processing during seeding.
+        
+        Args:
+            raw_items: List of entity dictionaries from scrapers
+            owner_cfg: Owner/profile configuration
+            enrich_llm: Whether to run LLM enrichment during seeding
+            yaml_path: Optional YAML file path for sync after DB insertion
+            source_name: Optional source name to filter entities for YAML update
+        
+        Returns:
+            Dictionary mapping entity keys (title or url) to entity_ids
         """
         conn = get_db(self.db_path)
         init_db(self.db_path)
 
+        entity_mappings = []  # Track (entity, entity_id) for YAML sync
+        entity_id_map = {}  # Return mapping of keys to entity_ids
+        
         try:
             # 1. Seed the owner (personal entity)
             self._seed_owner(conn, owner_cfg)
 
             # 2. Process all entities
             for item in raw_items:
-                self._seed_entity(conn, item, enrich_llm=enrich_llm)
+                entity_id = self._seed_entity(conn, item, enrich_llm=enrich_llm)
+                if entity_id:
+                    # Track for return value and YAML sync
+                    key = item.get("url") or item.get("title")
+                    if key:
+                        entity_id_map[key] = entity_id
+                    
+                    if yaml_path:
+                        # Track for YAML sync (filter by source if specified)
+                        if not source_name or item.get("source") == source_name:
+                            entity_mappings.append((item, entity_id))
 
             conn.commit()
             log.info(f"Seeding complete: {len(raw_items)} items processed")
+            
+            # 3. Update YAML cache with entity_ids
+            if yaml_path and entity_mappings:
+                log.info(f"Updating YAML cache with {len(entity_mappings)} entity_ids")
+                for entity, entity_id in entity_mappings:
+                    update_yaml_after_db_insert(
+                        yaml_path=yaml_path,
+                        entity_id=entity_id,
+                        title=entity.get("title"),
+                        url=entity.get("url")
+                    )
+                log.info(f"✓ YAML cache updated with entity_ids")
+            
+            return entity_id_map
+                
         except Exception as e:
             conn.rollback()
             log.error(f"Seeding failed: {e}")
@@ -192,10 +245,22 @@ class Seeder:
 
     # --- LLM POST-PROCESSING ---
 
-    def enrich_entity(self, entity_id: str, force: bool = False) -> bool:
+    def enrich_entity(
+        self,
+        entity_id: str,
+        force: bool = False,
+        yaml_path: Optional[Path] = None
+    ) -> bool:
         """
         Enrich a single entity with LLM post-processing.
-        Returns True if enriched successfully.
+        
+        Args:
+            entity_id: Entity ID to enrich
+            force: Force re-enrichment even if already enriched
+            yaml_path: Optional YAML file path to update after enrichment
+            
+        Returns:
+            True if enriched successfully
         """
         if not self.llm:
             log.warning("LLM not configured, skipping enrichment")
@@ -248,8 +313,9 @@ class Seeder:
                 log.warning(f"LLM enrichment failed for {entity_id}")
                 return False
 
-            # Update entity
+            # Update entity in DB
             from db.models import now_iso
+            llm_enriched_at = now_iso()
             conn.execute(
                 """UPDATE entities SET 
                    description = ?,
@@ -260,14 +326,14 @@ class Seeder:
                    WHERE id = ?""",
                 (
                     enrichment.get("description") or entity.get("description"),
-                    now_iso(),
-                    self.llm.model,
+                    llm_enriched_at,
+                    self.llm.model_name,
                     now_iso(),
                     entity_id
                 )
             )
 
-            # Update tags
+            # Update tags in DB
             for tag_type, tags in [
                 ("technology", enrichment.get("technologies", [])),
                 ("skill", enrichment.get("skills", [])),
@@ -283,6 +349,20 @@ class Seeder:
 
             conn.commit()
             log.info(f"Enriched entity: {entity.get('title')} ({entity_id[:8]})")
+            
+            # Update YAML cache with enriched fields
+            if yaml_path:
+                update_yaml_after_llm(
+                    yaml_path=yaml_path,
+                    entity_id=entity_id,
+                    description=enrichment.get("description"),
+                    technologies=enrichment.get("technologies", []),
+                    skills=enrichment.get("skills", []),
+                    tags=enrichment.get("tags", []),
+                    llm_model=self.llm.model_name,
+                    llm_enriched_at=llm_enriched_at
+                )
+            
             return True
 
         except Exception as e:
@@ -292,10 +372,22 @@ class Seeder:
         finally:
             conn.close()
 
-    def enrich_all(self, source: Optional[str] = None, batch_size: int = 50) -> int:
+    def enrich_all(
+        self,
+        source: Optional[str] = None,
+        batch_size: int = 50,
+        yaml_path: Optional[Path] = None
+    ) -> int:
         """
         Enrich all unenriched entities with LLM.
-        Returns count of successfully enriched entities.
+        
+        Args:
+            source: Optional source name to filter entities
+            batch_size: Maximum number of entities to process
+            yaml_path: Optional YAML file path to update after enrichment
+            
+        Returns:
+            Count of successfully enriched entities
         """
         if not self.llm:
             log.warning("LLM not configured, skipping enrichment")
@@ -326,7 +418,7 @@ class Seeder:
             count = 0
             for i, entity_id in enumerate(entity_ids, 1):
                 log.info(f"Processing {i}/{len(entity_ids)}: {entity_id[:8]}")
-                if self.enrich_entity(entity_id):
+                if self.enrich_entity(entity_id, yaml_path=yaml_path):
                     count += 1
 
                 # Rate limiting for API calls

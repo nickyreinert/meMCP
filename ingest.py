@@ -150,17 +150,39 @@ def main():
     if args.llm_only:
         log.info("LLM-only mode: processing entities...")
 
+        # Determine YAML path for the source
+        yaml_path = None
+        if args.source:
+            source_cfg = config.get("oeuvre_sources", {}).get(args.source, {})
+            if source_cfg:
+                # For oeuvre sources like medium_raw
+                html_path = source_cfg.get("html_path")
+                if html_path:
+                    yaml_path = Path(str(html_path) + ".yaml")
+            else:
+                # Check if it's a stages source (linkedin)
+                stages_cfg = config.get("stages", {})
+                if stages_cfg.get("source_type") == "linkedin_pdf":
+                    source_path = Path(stages_cfg.get("source_path", "linkedin_profile.pdf"))
+                    yaml_path = Path(str(source_path) + ".yaml")
+
         if args.item:
             # Single entity processing
             log.info(f"Processing single entity: {args.item}")
-            success = seeder.enrich_entity(args.item, force=True)
+            success = seeder.enrich_entity(args.item, force=True, yaml_path=yaml_path)
             if success:
                 log.info(f"Successfully enriched entity {args.item}")
             else:
                 log.error(f"Failed to enrich entity {args.item}")
         else:
             # Batch processing
-            count = seeder.enrich_all(source=args.source, batch_size=args.batch_size)
+            if yaml_path:
+                log.info(f"Will update YAML cache: {yaml_path}")
+            count = seeder.enrich_all(
+                source=args.source,
+                batch_size=args.batch_size,
+                yaml_path=yaml_path
+            )
             log.info(f"Enriched {count} entities")
 
         return
@@ -213,6 +235,8 @@ def main():
 
     # ── OEUVRE INGESTION ────────────────────────────────────────────
     oeuvre_sources = config.get("oeuvre_sources", {})
+    scrapers_with_yaml = []  # Track (scraper, items) for YAML sync
+    
     for name, cfg in oeuvre_sources.items():
         if args.source and name != args.source:
             continue
@@ -229,6 +253,10 @@ def main():
             items = scraper.run(force=args.force)
             log.info(f"  Fetched {len(items)} items from {name}")
             all_items.extend(items)
+            
+            # Track scrapers that have YAML caches for later sync
+            if hasattr(scraper, 'yaml_cache_path') and scraper.yaml_cache_path:
+                scrapers_with_yaml.append((scraper, items))
         except Exception as e:
             log.error(f"  Failed oeuvre source {name}: {e}")
 
@@ -239,7 +267,29 @@ def main():
 
         # Seed with or without LLM based on --disable-llm flag
         enrich_llm = not args.disable_llm
-        seeder.seed_all(all_items, owner_cfg, enrich_llm=enrich_llm)
+        entity_id_map = seeder.seed_all(all_items, owner_cfg, enrich_llm=enrich_llm)
+        
+        # Update YAML caches with entity_ids
+        for scraper, items in scrapers_with_yaml:
+            from scrapers.yaml_sync import update_yaml_after_db_insert
+            yaml_path = scraper.yaml_cache_path
+            log.info(f"Updating YAML cache: {yaml_path}")
+            
+            updated = 0
+            for item in items:
+                key = item.get("url") or item.get("title")
+                if key and key in entity_id_map:
+                    entity_id = entity_id_map[key]
+                    update_yaml_after_db_insert(
+                        yaml_path=yaml_path,
+                        entity_id=entity_id,
+                        title=item.get("title"),
+                        url=item.get("url")
+                    )
+                    updated += 1
+            
+            if updated > 0:
+                log.info(f"  ✓ Updated {updated} entity_ids in {yaml_path}")
 
         if args.disable_llm:
             log.info("Raw entities seeded. Run with --llm-only to enrich.")

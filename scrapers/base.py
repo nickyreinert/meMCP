@@ -18,6 +18,7 @@ class BaseScraper(abc.ABC):
         self.db_path = db_path
         self.enabled = config.get("enabled", False)
         self.limit = config.get("limit", 0)
+        self.yaml_cache_path: Optional[Path] = None  # Subclasses can set this
 
     def should_fetch(self, url: str, force: bool = False) -> bool:
         """Check if URL should be fetched based on cache age and entity existence."""
