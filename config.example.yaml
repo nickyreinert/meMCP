@@ -14,6 +14,11 @@ cache_dir: .cache
 cache_ttl_hours: 6
 watch_interval_minutes: 120
 
+# Auto-export entities to YAML after ingestion (for manual editing workflow)
+# If true, creates data/<source>_export.yaml files with entity_id
+# You can then edit these files and update DB with: python ingest.py --yaml-update --file data/<source>_export.yaml
+auto_export_yaml: true
+
 # ── Your identity ────────────────────────────────────────────
 # fixed values, will be added to the generic endpoint
 # supports multi languages, e.g. identity.de.name → "name": "Nicky Reinert" in the German version of the profile
