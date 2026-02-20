@@ -68,6 +68,9 @@ from db.models import (
     query_stages,
     query_oeuvre,
     query_graph,
+    get_tag_metrics,
+    query_skills_with_metrics,
+    query_technologies_with_metrics,
 )
 
 
@@ -647,31 +650,43 @@ async def graph(
 
 # ── Skills ────────────────────────────────────────────────────────────────────
 
-@app.get("/skills", summary="All skills with entity counts")
+@app.get("/skills", summary="All skills with entity counts and metrics")
 @limiter.limit("30/minute")
 async def skills_list(
     request: Request,
     conn=Depends(db),
     lang: Optional[str]            = Query(None, description="en | de"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+    order_by: Optional[str]        = Query("relevance_score", description="Sort by: relevance_score | proficiency | entity_count | experience_years"),
+    limit: int                     = Query(100, description="Maximum results"),
 ):
     """
-    Returns every distinct skill tag with how many entities carry it.
+    Returns every distinct skill tag with entity counts and calculated metrics.
     Skills are broad competencies: 'Data Analytics', 'Project Management',
     'GenAI', 'SEO', 'Automation', etc.
+    
+    Metrics include:
+      - proficiency: Expertise level (0-100) based on recency and duration
+      - experience_years: Total years of experience
+      - frequency: How often skill appears across entities (0-1)
+      - last_used: Most recent usage date
+      - diversity_score: Variety of contexts (0-1)
+      - growth_trend: increasing | stable | decreasing
+      - distribution: Breakdown by entity flavor and category
+      - relevance_score: Composite weighted score (0-100)
+    
     Different from /technologies which lists specific tools & frameworks.
-
     Use /skills/{name} to drill into all entities with a given skill.
     """
     resolved = resolve_lang(lang, accept_language)
-    skills = query_skills(conn)
+    skills = query_skills_with_metrics(conn, order_by=order_by, limit=limit)
     return ok(
         {"skills": skills, "count": len(skills)},
         meta=_lang_meta(resolved),
     )
 
 
-@app.get("/skills/{skill_name}", summary="Entities with a specific skill")
+@app.get("/skills/{skill_name}", summary="Entities with a specific skill and metrics")
 @limiter.limit("30/minute")
 async def skill_detail(
     request: Request,
@@ -683,6 +698,7 @@ async def skill_detail(
     """
     Returns all entities (jobs, projects, articles, education entries) that
     carry the requested skill, grouped by entity type.
+    Also includes calculated metrics for this skill.
     Results are localised into the requested language.
     """
     resolved = resolve_lang(lang, accept_language)
@@ -692,12 +708,18 @@ async def skill_detail(
     detail["entities"] = _localise_many(conn, detail["entities"], resolved)
     for key in detail["by_flavor"]:
         detail["by_flavor"][key] = _localise_many(conn, detail["by_flavor"][key], resolved)
+    
+    # Add metrics
+    metrics = get_tag_metrics(conn, skill_name, "skill")
+    if metrics:
+        detail["metrics"] = metrics
+    
     return ok(detail, meta=_lang_meta(resolved))
 
 
 # ── Technology ───────────────────────────────────────────────────────────────
 
-@app.get("/technology", summary="All technologies with entity counts")
+@app.get("/technology", summary="All technologies with entity counts and metrics")
 @limiter.limit("30/minute")
 async def technologies_list(
     request: Request,
@@ -706,20 +728,25 @@ async def technologies_list(
         None,
         description="Filter by tech category: language | framework | platform | tool | cloud | database",
     ),
+    order_by: Optional[str] = Query("relevance_score", description="Sort by: relevance_score | proficiency | entity_count | experience_years"),
+    limit: int = Query(100, description="Maximum results"),
 ):
     """
-    Returns every distinct technology tag with how many entities used it.
+    Returns every distinct technology tag with entity counts and calculated metrics.
     Technologies are specific tools, frameworks, and platforms:
     'Adobe Analytics', 'Python', 'Docker', 'FastAPI', etc.
+    
+    Metrics include proficiency, experience_years, frequency, last_used,
+    diversity_score, growth_trend, distribution, and relevance_score.
 
     Optionally filter by category. Use /technology/{name} for full context.
     Note: technology names are universal — no translation applied.
     """
-    technologies = query_technologies(conn, category=category)
+    technologies = query_technologies_with_metrics(conn, category=category, order_by=order_by, limit=limit)
     return ok({"technologies": technologies, "count": len(technologies)})
 
 
-@app.get("/technology/{tech_name}", summary="Entities that used a technology")
+@app.get("/technology/{tech_name}", summary="Entities that used a technology with metrics")
 @limiter.limit("30/minute")
 async def technology_detail(
     request: Request,
@@ -731,6 +758,7 @@ async def technology_detail(
     """
     Returns all entities that used this technology, plus the technology
     entity itself (with category, proficiency). Grouped by entity type.
+    Also includes calculated metrics for this technology.
     Entity titles/descriptions are localised; tech name stays in its original form.
     """
     resolved = resolve_lang(lang, accept_language)
@@ -740,6 +768,12 @@ async def technology_detail(
     detail["entities"] = _localise_many(conn, detail["entities"], resolved)
     for key in detail["by_flavor"]:
         detail["by_flavor"][key] = _localise_many(conn, detail["by_flavor"][key], resolved)
+    
+    # Add metrics
+    metrics = get_tag_metrics(conn, tech_name, "technology")
+    if metrics:
+        detail["metrics"] = metrics
+    
     return ok(detail, meta=_lang_meta(resolved))
 
 

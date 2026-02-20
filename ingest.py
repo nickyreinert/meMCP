@@ -304,6 +304,24 @@ def main():
                 )
                 if count > 0:
                     log.info(f"  ✓ Exported {count} oeuvre items to {yaml_file}")
+        
+        # ── METRICS CALCULATION ───────────────────────────────────────────
+        # Calculate metrics for all tags (skills, technologies, generic tags)
+        # after all data has been ingested
+        metrics_cfg = config.get("metrics", {})
+        if metrics_cfg.get("enabled", True) and not args.dry_run:
+            log.info("Calculating tag metrics...")
+            try:
+                from metrics.calculator import calculate_all_metrics
+                from db.models import get_db
+                
+                conn = get_db(db_path)
+                count = calculate_all_metrics(conn)
+                conn.close()
+                
+                log.info(f"  ✓ Calculated metrics for {count} tags")
+            except Exception as e:
+                log.warning(f"Metrics calculation failed: {e}")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,31 @@
+identity:
+  de:
+    name: Jane Doe
+    tagline: "Its me"
+    description: "I do stuff"
+    location: LA, USA
+    links:
+      github: https://github.com/janedoe
+      medium: https://janedoe.medium.com
+      blog_1: https://janedoe.de
+      blog_2: https://janedoe.com
+      linkedin: https://www.linkedin.com/in/janedoe
+    contact:
+      reason:
+      preferred: "other"
+      email: ""
+      phone: ""
+      telegram: ""
+      other: "LinkedIn message"
+    # this is a future feature, ignore it for now
+    # later goal is to have a "trust of web"
+    # those settings here point to other meMCP instances
+    people: 
+      incoming: 
+        someone_else_1: 
+          url: https://someoneelse.com/connect/?token=abc123
+          category: "employee" # who are you to that person
+      outgoing:
+        someone_else_2:
+          url: https://someoneelse.com/accept/?token=def456
+          category: "fan" # wo are you to that person
