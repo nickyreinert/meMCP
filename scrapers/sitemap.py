@@ -130,7 +130,7 @@ class SitemapScraper(BaseScraper):
 
         return {
             "flavor": "oeuvre",
-            "category": "article",
+            "category": self.config.get("sub_type_override", "article"),
             "title": title,
             "url": url,
             "source": self.name,

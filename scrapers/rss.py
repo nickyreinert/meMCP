@@ -62,8 +62,8 @@ class RSSScraper(BaseScraper):
             
             item = {
                 "flavor": "oeuvre",
-                "category": "article",
-                "sub_type": "blog_post",
+                "category": self.config.get("sub_type_override", "article"),
+                "sub_type": self.config.get("sub_type_override", "blog_post"),
                 "title": title,
                 "url": link,
                 "source": self.name,

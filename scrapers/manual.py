@@ -1,127 +1,177 @@
+"""
+scrapers/manual.py — Manual YAML Data Loader
+=============================================
+Loads manually curated entities from YAML files.
+Useful for static information that doesn't change often or data that cannot be scraped.
+
+Purpose:
+- Load pre-structured entities from YAML files
+- Support both 'stages' and 'oeuvre' flavors
+- Check file modification time against cache_ttl_hours
+"""
+
 import logging
-import requests
+import yaml
 from typing import List, Dict, Any
+from pathlib import Path
 from .base import BaseScraper
-from bs4 import BeautifulSoup
-import datetime
+from datetime import datetime, timezone
 
 log = logging.getLogger("mcp.scrapers.manual")
 
+
 class ManualScraper(BaseScraper):
+    """
+    Load entities from manually curated YAML files.
+    
+    Expected YAML structure:
+    ```yaml
+    entities:
+      job1:
+        flavor: stages
+        category: job
+        title: "Software Engineer at XYZ"
+        description: "..."
+        company: "XYZ"
+        start_date: "2020-01-01"
+        end_date: "2022-12-31"
+        skills: ["Python", "React"]
+        technologies: ["Django", "AWS"]
+        tags: ["Full-stack"]
+      
+      project1:
+        flavor: oeuvre
+        category: coding
+        title: "Personal Portfolio Website"
+        description: "..."
+        url: "https://example.com"
+        date: "2021-06-15"
+        skills: ["Web Development"]
+        technologies: ["Next.js"]
+        tags: ["Portfolio"]
+    ```
+    """
+    
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
+        """
+        Load entities from YAML file.
+        
+        Args:
+            force: If True, re-process even if cached
+        
+        Returns:
+            List of entity dictionaries
+        """
         url = self.config.get("url")
         if not url:
             log.error(f"Missing URL for source {self.name}")
             return []
-
-        settings = self.config.get("connector-setup", {})
-        post_selector = settings.get("post_url_selector", "a")
-
-        # 1. Fetch the main list page
-        log.info(f"Fetching {url}")
-        html = self._fetch_url(url)
-        if not html:
+        
+        # Handle file:// URLs
+        if url.startswith("file://"):
+            file_path = url[7:]  # Remove 'file://' prefix
+        else:
+            log.error(f"Only file:// URLs supported for manual connector, got: {url}")
             return []
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # 2. Extract links
-        links = set()
-        all_links = soup.select(post_selector)
-        log.info(f"Found {len(all_links)} elements matching selector '{post_selector}'")
-        for a in soup.select(post_selector):
-            href = a.get("href")
-            if href:
-                # Handle relative URLs if needed, though usually medium ones are ok or absolute
-                if href.startswith("/"):
-                    # construct absolute url
-                     # parsing the base url to find domain
-                    from urllib.parse import urlparse
-                    parsed = urlparse(url)
-                    base = f"{parsed.scheme}://{parsed.netloc}"
-                    href = base + href
-
-                # Medium specific cleanup (remove query params for canonical checking?)
-                # user said "href starting @nickyreinert/", so we trust the selector.
-
-                # Check if we should process this link
-                if self.should_fetch(href, force):
-                     links.add(href)
-
+        
+        yaml_path = Path(file_path)
+        if not yaml_path.exists():
+            log.error(f"File not found: {yaml_path}")
+            return []
+        
+        # Check if file needs reprocessing based on modification time and cache TTL
+        cache_ttl_hours = self.config.get("cache_ttl_hours", 168)  # Default: 7 days
+        
+        if not force:
+            file_mtime = datetime.fromtimestamp(yaml_path.stat().st_mtime, tz=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - file_mtime).total_seconds() / 3600
+            
+            if age_hours > cache_ttl_hours:
+                log.info(f"File {yaml_path.name} was modified {age_hours:.1f}h ago (TTL: {cache_ttl_hours}h)")
+                # Note: For manual files, we still load them but mark for potential LLM reprocessing
+                # The should_fetch() check will determine if entities need LLM enrichment
+            else:
+                log.debug(f"File {yaml_path.name} is fresh ({age_hours:.1f}h old)")
+        
+        log.info(f"Reading manual YAML from {yaml_path}")
+        
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+        except Exception as e:
+            log.error(f"Failed to parse YAML file {yaml_path}: {e}")
+            return []
+        
+        if not data or "entities" not in data:
+            log.error(f"Invalid YAML structure: missing 'entities' key in {yaml_path}")
+            return []
+        
+        entities_dict = data.get("entities", {})
         results = []
-        count = 0
-        limit = self.config.get("limit", 0)
-        errors = 0
-
-        for link in links:
-            if limit and count >= limit:
-                break
-
-            try:
-                item = self._process_page(link, settings)
-                if item:
-                    results.append(item)
-                    count += 1
-                    errors = 0  # Reset error counter on success
-            except Exception as e:
-                log.error(f"Failed to process {link}: {e}")
-                errors += 1
-                if errors >= 10:
-                    log.error("Too many errors, stopping scraper")
-                    break
-
-        return results
-
-    def _process_page(self, url: str, settings: Dict[str, Any]) -> Dict[str, Any]:
-        log.info(f"Processing manual page: {url}")
-        html = self._fetch_url(url)
-        if not html:
-            return None
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        title_sel = settings.get("post-title-selector", "title")
-        content_sel = settings.get("post-content-selector", "body")
-        date_sel = settings.get("post-published-date-selector")
-        desc_sel = settings.get("post-description-selector")
-
-        title_el = soup.select_one(title_sel)
-        title = title_el.get_text(strip=True) if title_el else "Untitled"
-
-        # Content (maybe getting text is enough for now)
-        content_el = soup.select_one(content_sel)
-        # We might want to keep HTML or just text. For LLM summarization, text is usually better and smaller.
-        description = content_el.get_text(strip=True)[:5000] if content_el else "" # limit size
-
-        # Meta description overlay
-        if desc_sel:
-            # Check for generic meta tag structure
-            meta = soup.select_one(desc_sel)
-            if meta and meta.get("content"):
-                # Prefer meta description for the short description field
-                description = meta.get("content")
-
-        published_at = None
-        if date_sel:
-            meta_date = soup.select_one(date_sel)
-            if meta_date and meta_date.get("content"):
-                published_at = meta_date.get("content")
-
-        return {
-            "flavor": "oeuvre",
-            "category": item.get("category", "article"),
-            "title": title,
-            "url": url,
-            "source": self.name,
-            "source_url": url,
-            "description": description,
-            "published_at": published_at,
-             # We might want to store the full content somewhere if needed,
-             # but 'description' is the main field in the entity model
-             # The seeder usually enriches descriptions.
-            "ext": {
-                "platform": self.name,
-                "read_time": 5, # Placeholder or calc from word count
-                "published_at": published_at
+        
+        for entity_key, entity_data in entities_dict.items():
+            if not isinstance(entity_data, dict):
+                log.warning(f"Skipping invalid entity '{entity_key}': not a dictionary")
+                continue
+            
+            # Extract base fields
+            flavor = entity_data.get("flavor")
+            category = entity_data.get("category")
+            title = entity_data.get("title")
+            
+            if not flavor or not category or not title:
+                log.warning(f"Skipping entity '{entity_key}': missing required fields (flavor, category, title)")
+                continue
+            
+            # Build entity dict
+            entity = {
+                "flavor": flavor,
+                "category": category,
+                "title": title,
+                "description": entity_data.get("description", ""),
+                "source": self.name,
+                "source_url": entity_data.get("url", f"file://{yaml_path}#{entity_key}"),
             }
-        }
+            
+            # Add optional fields based on flavor
+            if flavor == "stages":
+                # Stages-specific fields
+                if "start_date" in entity_data:
+                    entity["start_date"] = entity_data["start_date"]
+                if "end_date" in entity_data:
+                    entity["end_date"] = entity_data["end_date"]
+                if "company" in entity_data:
+                    entity["company"] = entity_data["company"]
+            
+            elif flavor == "oeuvre":
+                # Oeuvre-specific fields
+                if "url" in entity_data:
+                    entity["url"] = entity_data["url"]
+                if "date" in entity_data:
+                    entity["published_at"] = entity_data["date"]
+            
+            # Add classification fields (common to both flavors)
+            if "skills" in entity_data:
+                entity["skills"] = entity_data["skills"]
+            if "technologies" in entity_data:
+                entity["technologies"] = entity_data["technologies"]
+            if "tags" in entity_data:
+                entity["tags"] = entity_data["tags"]
+            
+            # Store additional metadata in ext
+            entity["ext"] = {
+                "platform": "manual",
+                "entity_key": entity_key,
+            }
+            
+            # Add any extra fields to ext
+            extra_fields = {"location", "read_time", "language", "authors"}
+            for field in extra_fields:
+                if field in entity_data:
+                    entity["ext"][field] = entity_data[field]
+            
+            results.append(entity)
+            log.debug(f"Loaded entity: {title} ({flavor}/{category})")
+        
+        log.info(f"Loaded {len(results)} entities from {yaml_path.name}")
+        return results

@@ -132,7 +132,7 @@ Medium does not allow scraping your complete story list. To consider all your Me
 This will create a processed file `data/Medium.html.yaml` that can be used for manual editing and will be used for future runs to avoid re-parsing the HTML file, as long as this file exists.
 
 ```yaml
-  medium_raw:
+  medium_raw: # can be named anything, but the `connector` must be `medium_raw`
     connector: medium_raw
     enabled: true
     url: file://data/Medium.html
@@ -145,7 +145,7 @@ This will create a processed file `data/Medium.html.yaml` that can be used for m
 For incremental updates, you can switch to the `rss` connector, but it will only consider the ~10 most recent articles from the RSS feed.
 
 ```yaml
-  medium_rss:
+  medium_rss: # can be named anything, but the `connector` must be `medium_rss`
     connector: medium_rss
     enabled: true
     url: https://medium.com/feed/@nickyreinert
@@ -160,7 +160,7 @@ For incremental updates, you can switch to the `rss` connector, but it will only
 Github offers an API to parse your repositories. The parser will extract metadata, like use languages, description and README content, which can be enriched with LLM to create a more detailed description of the project and extract `technologies`, `skills` and `tags`.
 
 ```yaml
-  github:
+  github: # can be named anything, but the `connector` must be `github_api`
     connector: github_api
     enabled: true
     url: https://api.github.com/users/nickyreinert/repos
@@ -175,7 +175,7 @@ Github offers an API to parse your repositories. The parser will extract metadat
 You can also add any RSS/Atom feed as source. The parser will extract metadata and content, which can be enriched with LLM to create a more detailed description of the article and extract `technologies`, `skills` and `tags`.
 
 ```yaml
-  my_blog:
+  my_blog: # can be named anything
     connector: rss
     enabled: true
     url: https://myblog.com/feed.xml
@@ -190,7 +190,7 @@ You can also add any RSS/Atom feed as source. The parser will extract metadata a
 You can also add any public webpage with a list of your works as source. The scraper will extract metadata and content, which can be enriched with LLM to create a more detailed description of the article and extract `technologies`, `skills` and `tags`.
 
 ```yaml
-  my_publications:
+  my_publications: # can be named anything
     connector: sitemap
     enabled: true
     url: https://mypublications.com/sitemap.xml
@@ -205,7 +205,7 @@ You can also add any public webpage with a list of your works as source. The scr
 You can provide a YAML file with manually curated entities. This is useful for static information that doesn't change often, or for data that cannot be easily scraped. The file should contain a list of entities with the same structure as the database entries. The data can be undertand as `stages` or `oeuvre` flavor. This connector checks the file date and compares it to the ingestion date to decide whether to reprocess the file with LLM or not, based on the `cache_ttl_hours` setting.
 
 ```yaml
-  manual:
+  manual: # can be named anything
     connector: manual
     enabled: true
     url: file://data/manual_data.yaml
@@ -218,7 +218,7 @@ The required structure of the `manual_data.yaml` file is as follows:
 ```yaml
 entities:
   job1:
-    flavor: stages
+    flavor: stages  
     category: job
     title: "Software Engineer at XYZ"
     description: "Worked on developing web applications using Python and React."

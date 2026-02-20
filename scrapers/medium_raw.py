@@ -4,6 +4,11 @@ scrapers/medium_raw.py — Medium Raw HTML Parser
 Parses a raw HTML dump of Medium profile page to extract all published articles.
 Extracts article links, titles, and publication dates from DOM structure.
 
+YAML Caching:
+- First run: Parses HTML → creates `<file>.yaml` cache
+- Subsequent runs: Loads from YAML cache (fast, skips HTML parsing)
+- Manual editing: Edit the YAML file to refine content
+
 Depends on:
 - BeautifulSoup4 for HTML parsing
 - base.BaseScraper for common functionality
@@ -11,6 +16,7 @@ Depends on:
 
 import logging
 import re
+import yaml
 from typing import List, Dict, Any
 from pathlib import Path
 from datetime import datetime
@@ -28,6 +34,7 @@ class MediumRawScraper(BaseScraper):
     Purpose:
     - Bypass Medium's Cloudflare protection by working with saved HTML
     - Extract complete article history (not limited to RSS feed)
+    - Cache results in YAML for manual editing
     
     Input: HTML file path (file:// URL)
     Output: List of article entities with title, URL, date
@@ -36,9 +43,10 @@ class MediumRawScraper(BaseScraper):
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
         """
         Parse the raw HTML file and extract all Medium articles.
+        Checks for YAML cache first, falls back to HTML parsing.
         
         Args:
-            force: If True, re-process even if cached
+            force: If True, re-process HTML even if YAML cache exists
         
         Returns:
             List of article dictionaries
@@ -56,18 +64,123 @@ class MediumRawScraper(BaseScraper):
             if not html_path.exists():
                 log.error(f"File not found: {html_path}")
                 return []
-            
-            log.info(f"Reading Medium HTML from {html_path}")
-            try:
-                content = html_path.read_text(encoding='utf-8')
-            except Exception as e:
-                log.error(f"Failed to read file {html_path}: {e}")
-                return []
         else:
             log.error(f"Only file:// URLs supported for medium_raw connector, got: {url}")
             return []
         
-        # Parse HTML
+        # Check for YAML cache
+        yaml_cache_path = Path(str(html_path) + ".yaml")
+        
+        if yaml_cache_path.exists() and not force:
+            log.info(f"Loading Medium articles from YAML cache: {yaml_cache_path}")
+            return self._load_from_yaml(yaml_cache_path)
+        
+        # Parse HTML (first run or forced refresh)
+        log.info(f"Reading Medium HTML from {html_path}")
+        try:
+            content = html_path.read_text(encoding='utf-8')
+        except Exception as e:
+            log.error(f"Failed to read file {html_path}: {e}")
+            return []
+        
+        articles = self._parse_html(content)
+        
+        if articles:
+            # Create YAML cache for future runs and manual editing
+            log.info(f"Creating YAML cache for manual editing: {yaml_cache_path}")
+            self._save_to_yaml(articles, yaml_cache_path)
+            log.info(f"✓ YAML cache created at {yaml_cache_path}")
+            log.info(f"  → Edit this file manually, then re-run (will load from cache)")
+        
+        return articles
+    
+    def _load_from_yaml(self, yaml_path: Path) -> List[Dict[str, Any]]:
+        """
+        Load articles from YAML cache.
+        
+        Args:
+            yaml_path: Path to YAML cache file
+        
+        Returns:
+            List of article dictionaries
+        """
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            
+            if not data or "articles" not in data:
+                log.error(f"Invalid YAML structure: missing 'articles' key in {yaml_path}")
+                return []
+            
+            articles = data.get("articles", [])
+            log.info(f"Loaded {len(articles)} articles from YAML cache")
+            
+            # Convert YAML format to internal entity format
+            results = []
+            for article in articles:
+                entity = {
+                    "flavor": "oeuvre",
+                    "category": "article",
+                    "sub_type": self.config.get("sub_type_override", "article"),
+                    "title": article.get("title", "Untitled"),
+                    "url": article.get("url", ""),
+                    "source": self.name,
+                    "source_url": article.get("url", ""),
+                    "description": article.get("description", ""),
+                    "published_at": article.get("published_at"),
+                    "ext": {
+                        "platform": "medium",
+                        "published_at": article.get("published_at"),
+                        "published_date_text": article.get("published_date_text"),
+                    }
+                }
+                results.append(entity)
+            
+            return results
+            
+        except Exception as e:
+            log.error(f"Failed to load YAML cache {yaml_path}: {e}")
+            return []
+    
+    def _save_to_yaml(self, articles: List[Dict[str, Any]], yaml_path: Path):
+        """
+        Save articles to YAML cache for manual editing.
+        
+        Args:
+            articles: List of article dictionaries
+            yaml_path: Path to save YAML cache
+        """
+        # Convert internal format to clean YAML format
+        yaml_articles = []
+        for article in articles:
+            yaml_articles.append({
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "published_at": article.get("published_at"),
+                "published_date_text": article.get("ext", {}).get("published_date_text"),
+                "description": article.get("description", ""),
+            })
+        
+        yaml_data = {
+            "articles": yaml_articles
+        }
+        
+        try:
+            with open(yaml_path, 'w', encoding='utf-8') as f:
+                yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        except Exception as e:
+            log.error(f"Failed to save YAML cache to {yaml_path}: {e}")
+    
+    def _parse_html(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Parse HTML content to extract Medium articles.
+        
+        Args:
+            content: HTML content string
+        
+        Returns:
+            List of article dictionaries
+        """
         try:
             soup = BeautifulSoup(content, 'html.parser')
         except Exception as e:
@@ -100,11 +213,6 @@ class MediumRawScraper(BaseScraper):
             
             # Skip duplicates
             if article_url in seen_urls:
-                continue
-            
-            # Check if we should fetch this article
-            if not self.should_fetch(article_url, force):
-                log.debug(f"Skipping already processed: {article_url}")
                 continue
             
             seen_urls.add(article_url)

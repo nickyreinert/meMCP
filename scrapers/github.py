@@ -52,7 +52,7 @@ class GithubScraper(BaseScraper):
             # Basic mapping
             item = {
                 "flavor": "oeuvre",
-                "category": "coding",
+                "category": self.config.get("sub_type_override", "coding"),
                 "title": repo.get("name"),
                 "description": repo.get("description") or "",
                 "url": repo_url,
@@ -60,6 +60,11 @@ class GithubScraper(BaseScraper):
                 "source_url": repo_url,
                 "date": repo.get("created_at"),
                 "technologies": [repo.get("language")] if repo.get("language") else [],
+                "ext": {
+                    "platform": "github",
+                    "stars": repo.get("stargazers_count", 0),
+                    "forks": repo.get("forks_count", 0),
+                }
             }
             
             # Fetch generic README if requested
