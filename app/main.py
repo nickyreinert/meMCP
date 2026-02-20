@@ -93,7 +93,7 @@ host = server_cfg.get('host', 'localhost')
 port = server_cfg.get('port', 8000)
 # Use localhost for display if host is 0.0.0.0 (bind-all)
 display_host = 'localhost' if host == '0.0.0.0' else host
-BASE_URL = CONFIG.get("base_url", f"http://{display_host}:{port}")
+BASE_URL = server_cfg.get("base_url", f"http://{display_host}:{port}")
 
 # Templates directory
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
