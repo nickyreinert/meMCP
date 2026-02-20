@@ -1,6 +1,8 @@
 import logging
 import xml.etree.ElementTree as ET
+import yaml
 from typing import List, Dict, Any
+from pathlib import Path
 from .base import BaseScraper
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
@@ -14,6 +16,11 @@ class SitemapScraper(BaseScraper):
     Modes:
       - single_entity=True: Treats entire site as single entity (uses frontpage only)
       - single_entity=False: Treats each page as separate entity (default)
+    
+    Cache File Workflow:
+      - If cache-file exists: Load from cache, skip fetching
+      - If LLM fields empty + LLM enabled: Flag for LLM reprocessing
+      - If cache-file missing: Fetch and save to cache file
     """
 
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
@@ -24,14 +31,28 @@ class SitemapScraper(BaseScraper):
 
         single_entity = self.config.get("single-entity", False)
         settings = self.config.get("connector-setup", {})
+        cache_file = self.config.get("cache-file")
+        
+        # Check if cache file exists and should be used
+        if cache_file and not force:
+            cached_entities = self._load_from_cache(cache_file)
+            if cached_entities is not None:
+                log.info(f"Loaded {len(cached_entities)} entities from cache file")
+                return cached_entities
         
         # Single entity mode: treat whole site as one entity
         if single_entity:
             log.info(f"Single-entity mode: fetching frontpage from sitemap domain")
-            return self._run_single_entity_mode(url, settings, force)
+            entities = self._run_single_entity_mode(url, settings, force)
+        else:
+            # Multi-entity mode: each page is a separate entity
+            entities = self._run_multi_entity_mode(url, settings, force)
         
-        # Multi-entity mode: each page is a separate entity
-        return self._run_multi_entity_mode(url, settings, force)
+        # Save to cache file if specified
+        if cache_file and entities:
+            self._save_to_cache(cache_file, entities)
+        
+        return entities
     
     def _run_single_entity_mode(self, sitemap_url: str, settings: Dict[str, Any], force: bool) -> List[Dict[str, Any]]:
         """Treat the whole site as a single entity using frontpage content."""
@@ -217,3 +238,77 @@ class SitemapScraper(BaseScraper):
                 "published_at": published_at
             }
         }
+    
+    def _load_from_cache(self, cache_file: str) -> List[Dict[str, Any]]:
+        """
+        Load entities from cache file.
+        
+        Returns None if cache doesn't exist or is invalid.
+        Checks if LLM reprocessing is needed based on empty classification fields.
+        """
+        if cache_file.startswith("file://"):
+            file_path = cache_file[7:]
+        else:
+            file_path = cache_file
+        
+        cache_path = Path(file_path)
+        if not cache_path.exists():
+            log.debug(f"Cache file not found: {cache_path}")
+            return None
+        
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+        except Exception as e:
+            log.error(f"Failed to parse cache file {cache_path}: {e}")
+            return None
+        
+        if not data or "entities" not in data:
+            log.warning(f"Invalid cache structure: missing 'entities' key in {cache_path}")
+            return None
+        
+        entities_list = data.get("entities", [])
+        if not isinstance(entities_list, list):
+            log.warning(f"Invalid cache structure: 'entities' must be a list in {cache_path}")
+            return None
+        
+        llm_enabled = self.config.get("llm-processing", False)
+        results = []
+        
+        for entity in entities_list:
+            if not isinstance(entity, dict):
+                continue
+            
+            # Check if LLM fields are empty and LLM is enabled
+            if llm_enabled:
+                has_tags = entity.get("tags") and len(entity.get("tags", [])) > 0
+                has_skills = entity.get("skills") and len(entity.get("skills", [])) > 0
+                has_tech = entity.get("technologies") and len(entity.get("technologies", [])) > 0
+                
+                if not (has_tags or has_skills or has_tech):
+                    # Mark for LLM reprocessing by setting flag
+                    entity["needs_llm_enrichment"] = True
+                    log.debug(f"Entity '{entity.get('title')}' needs LLM enrichment")
+            
+            results.append(entity)
+        
+        log.info(f"Loaded {len(results)} entities from cache: {cache_path.name}")
+        return results
+    
+    def _save_to_cache(self, cache_file: str, entities: List[Dict[str, Any]]):
+        """Save entities to cache file in YAML format."""
+        if cache_file.startswith("file://"):
+            file_path = cache_file[7:]
+        else:
+            file_path = cache_file
+        
+        cache_path = Path(file_path)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            data = {"entities": entities}
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            log.info(f"Saved {len(entities)} entities to cache: {cache_path}")
+        except Exception as e:
+            log.error(f"Failed to save cache file {cache_path}: {e}")

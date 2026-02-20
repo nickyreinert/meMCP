@@ -138,6 +138,7 @@ oeuvre_sources:
   #   cache_ttl_hours: 336       # 14 days cache TTL
   #   llm-processing: true
   #   single-entity: false       # Each page becomes a separate entity (default)
+  #   cache-file: file://data/blog_sitemap.yaml  # Optional: cache for manual editing
   #
   #   connector-setup:
   #     post-title-selector: h1
@@ -153,6 +154,7 @@ oeuvre_sources:
   #   sub_type_override: website
   #   llm-processing: true
   #   single-entity: true        # Treat entire site as one entity
+  #   cache-file: file://data/project_sitemap.yaml  # Optional: cache for manual editing
   #
   #   connector-setup:
   #     post-title-selector: h1

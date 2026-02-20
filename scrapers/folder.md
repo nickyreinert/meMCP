@@ -48,6 +48,11 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 - Fetches pages with basic HTTP
 - Configurable CSS selectors for content extraction
 - Works for static sites and blogs
+- **Cache file support** (`cache-file`):
+  - If cache exists: loads from cache, skips fetching
+  - If LLM fields empty + LLM enabled: flags for reprocessing
+  - If cache missing: fetches and saves to cache
+  - Allows manual editing without losing changes
 
 ### Manual (`manual`)
 - Custom HTML scraping with CSS selectors

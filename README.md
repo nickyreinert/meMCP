@@ -197,9 +197,15 @@ You can also add any RSS/Atom feed as source. The parser will extract metadata a
     llm-processing: true
 ```
 
-### Sitemap Scraper
+### Website and Sitemap Scraper
 
-You can add any website with a sitemap.xml as a source. A sitemap usually indicates a couple of seperated projects. 
+You can add any website with a sitemap.xml as a source. A sitemap usually indicates multiple pages. By default each page is considered a single *entity*, which means it will be fetched, summarized and classified. If you want the entire site to be considered as a whole, you can set `single-entity: true`. 
+
+**Cache File Workflow:**
+- If `cache-file` is specified and exists: loads from cache, skips fetching
+- If cache exists but LLM fields (tags, skills, technologies) are empty AND `llm-processing: true`: reprocesses with LLM
+- If cache missing: fetches pages and saves to cache file
+- Cache file allows manual editing of extracted data without losing changes on subsequent runs
 
 **Mode 1: Multi-entity** (each page = separate entity)
 ```yaml
@@ -212,6 +218,7 @@ You can add any website with a sitemap.xml as a source. A sitemap usually indica
     cache_ttl_hours: 168        # 7 days
     llm-processing: true
     single-entity: false        # Each page becomes a separate entity (default)
+    cache-file: file://data/myblog_sitemap.yaml  # Optional: cache for manual editing
     
     connector-setup:
       post-title-selector: h1
@@ -229,11 +236,13 @@ You can add any website with a sitemap.xml as a source. A sitemap usually indica
     sub_type_override: website
     llm-processing: true
     single-entity: true         # Treat entire site as one entity
+    cache-file: file://data/myproject_sitemap.yaml  # Optional: cache for manual editing
     
     connector-setup:
       post-title-selector: h1
       post-content-selector: main
       post-description-selector: 'meta[name="description"]'
+``` 
 ```
 
 ### Static Manual Data
