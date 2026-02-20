@@ -1,0 +1,9 @@
+data
+*.code-workspace
+.venv
+config.yaml
+db/*.db
+db/*.db-*
+!db/models.py
+__pycache__
+*.pyc
