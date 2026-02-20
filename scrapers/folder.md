@@ -99,7 +99,7 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 
 ### 2. Configure
 ```yaml
-oeuvre_sources:
+oeuvre:
   medium:
     enabled: true
     connector: medium_raw

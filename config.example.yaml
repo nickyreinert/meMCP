@@ -87,7 +87,7 @@ stages:
 # ── Sources for oeuvre ─────────────────────────────────────────────────
 # Configure the sources to fetch your data from. Each source can be enabled/disabled independently.
 # source names must be unique, e.g. github, medium, blog_1, blog_2, etc. but you can define as many as you like.
-oeuvre_sources:
+oeuvre:
 
   github:
     enabled: true

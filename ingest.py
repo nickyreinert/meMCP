@@ -103,7 +103,7 @@ def main():
         # Determine YAML path for the source
         yaml_path = None
         if args.source:
-            source_cfg = config.get("oeuvre_sources", {}).get(args.source, {})
+            source_cfg = config.get("oeuvre", {}).get(args.source, {})
             if source_cfg:
                 # For oeuvre sources like medium_raw
                 html_path = source_cfg.get("html_path")
@@ -188,9 +188,9 @@ def main():
                     log.error(f"  Failed stages source: {e}")
 
     # ── OEUVRE INGESTION ────────────────────────────────────────────
-    oeuvre_sources = config.get("oeuvre_sources", {})
+    oeuvre = config.get("oeuvre", {})
     
-    for name, cfg in oeuvre_sources.items():
+    for name, cfg in oeuvre.items():
         if args.source and name != args.source:
             continue
 
@@ -305,7 +305,7 @@ def main():
             from scrapers.yaml_exporter import export_to_yaml
             
             # Export Medium/oeuvre entities by source
-            for source_name, source_cfg in config.get("oeuvre_sources", {}).items():
+            for source_name, source_cfg in config.get("oeuvre", {}).items():
                 # Skip sources not matching --source filter
                 if args.source and source_name != args.source:
                     continue

@@ -173,7 +173,7 @@ llm:
   backend: ollama  # or groq
   model: mistral-small:24b-instruct-2501-q4_K_M
 
-oeuvre_sources:
+oeuvre:
   github:
     enabled: true
     connector: github_api

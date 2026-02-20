@@ -188,7 +188,7 @@ class Seeder:
         tags = [norm_tag(t) for t in item.get("tags", [])]
 
         # Check if LLM enrichment is enabled for this source
-        source_cfg = self.config.get("oeuvre_sources", {}).get(source, {}) or \
+        source_cfg = self.config.get("oeuvre", {}).get(source, {}) or \
                      self.config.get("stages", {})
         llm_enabled = source_cfg.get("llm-processing", True) if source_cfg else True
 
@@ -297,7 +297,7 @@ class Seeder:
             # Check if source has LLM processing enabled
             source_name = entity.get("source")
             if source_name and self.config:
-                source_cfg = self.config.get("oeuvre_sources", {}).get(source_name, {}) or \
+                source_cfg = self.config.get("oeuvre", {}).get(source_name, {}) or \
                              self.config.get("stages", {})
                 if source_cfg and not source_cfg.get("llm-processing", True):
                     log.debug(f"Source {source_name} has llm-processing disabled")

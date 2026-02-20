@@ -325,7 +325,7 @@ stages:
 
 ### Oeuvre Sources
 ```yaml
-oeuvre_sources:
+oeuvre:
   medium:
     enabled: true
     connector: medium_raw
