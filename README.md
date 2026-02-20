@@ -10,6 +10,55 @@ A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves y
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
 
+## Data Model
+
+The MCP differentiates stores all information as entities. There are three main types (`flavor` of entities):
+
+- `personal` - Static information about you (name, bio, greetings, contact details, etc.)
+- `stages` - Career stages (education, jobs, projects, publications, etc.) with timeframes and descriptions
+- `oeuvre` - Your work (code repos, articles, books, talks, etc.) with metadata and links
+
+Entities carry additional meta data, like:
+- `source` - refers to the configuration slug
+- `source_url` - refers to where the script fetched the data from
+- `title` - if the particular source provides a title
+- `description` - an LLM enriched description of the entity, based on the original source content (e.g., repo description, article summary, etc.)
+- `start_date` and `end_date` - for stages, if available (e.g., job duration, project timeline, etc.)
+- `date` - for oeuvre, if available (e.g., publication date, repo creation date, etc.)
+- `created_at` and `updated_at` - timestamps for when the entity was created and last updated in the database
+- `llm_enriched` - boolean flag indicating whether the entity has been enriched with LLM-generated content (e.g., description)
+- `llm_model` - the name of the LLM model used for enrichment, if applicable (e.g., "mistral-small:24b-instruct-2501-q4_K_M")
+
+Each entity of `stages` can be classified into two `categories`:
+- `education`
+- `job`
+
+Entities of `oeuvre` can be classified into:
+- `coding`
+- `blog_post`
+- `article`
+- `book`
+- `website`
+- and more...
+
+Besides that `stages` and `oeuvre` entities can be further classified to identify **technologies**, **skills** and **general tags**. 
+
+`technologies` can be
+- Programming languages (Python, JavaScript, etc.)
+- Frameworks (React, Django, etc.)
+- Tools (Docker, Git, etc.)
+
+`skills` are more about your capabilities and expertise, like
+- Data Analysis
+- Project Management
+- Public Speaking
+- System Operations
+
+And finally `tags` describe the content in a more general way, like
+- AI
+- Web Development
+- Open Source
+
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -84,8 +133,8 @@ This will create a processed file `data/Medium.html.yaml` that can be used for m
 
 ```yaml
   medium_raw:
-    enabled: true
     connector: medium_raw
+    enabled: true
     url: file://data/Medium.html
     sub_type_override: article
     limit: 0  # 0 = all available
@@ -95,11 +144,10 @@ This will create a processed file `data/Medium.html.yaml` that can be used for m
 
 For incremental updates, you can switch to the `rss` connector, but it will only consider the ~10 most recent articles from the RSS feed.
 
-
 ```yaml
   medium_rss:
+    connector: medium_rss
     enabled: true
-    connector: medium_raw
     url: https://medium.com/feed/@nickyreinert
     sub_type_override: article
     limit: 0  # 0 = all available
@@ -107,8 +155,94 @@ For incremental updates, you can switch to the `rss` connector, but it will only
     llm-processing: true
 ```
 
+### GitHub
 
-### LLM Backend Setup
+Github offers an API to parse your repositories. The parser will extract metadata, like use languages, description and README content, which can be enriched with LLM to create a more detailed description of the project and extract `technologies`, `skills` and `tags`.
+
+```yaml
+  github:
+    connector: github_api
+    enabled: true
+    url: https://api.github.com/users/nickyreinert/repos
+    sub_type_override: coding   # Override default sub_type (coding/blog_post/article/book/website/podcast/video)
+    limit: 0                    # 0 = all, otherwise integer limit on number of repos to fetch
+    fetch_readmes: true         # true = richer descriptions, slower
+    llm-processing: true        
+```
+
+### Generic RSS/Atom Feeds
+
+You can also add any RSS/Atom feed as source. The parser will extract metadata and content, which can be enriched with LLM to create a more detailed description of the article and extract `technologies`, `skills` and `tags`.
+
+```yaml
+  my_blog:
+    connector: rss
+    enabled: true
+    url: https://myblog.com/feed.xml
+    sub_type_override: blog_post
+    limit: 0  # 0 = all available
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+```
+
+### Generic HTML Scraper
+
+You can also add any public webpage with a list of your works as source. The scraper will extract metadata and content, which can be enriched with LLM to create a more detailed description of the article and extract `technologies`, `skills` and `tags`.
+
+```yaml
+  my_publications:
+    connector: sitemap
+    enabled: true
+    url: https://mypublications.com/sitemap.xml
+    sub_type_override: publication
+    limit: 0  # 0 = all available
+    cache_ttl_hours: 168  # 7 days
+    llm-processing: true
+```
+
+### Static Manual Data
+
+You can provide a YAML file with manually curated entities. This is useful for static information that doesn't change often, or for data that cannot be easily scraped. The file should contain a list of entities with the same structure as the database entries. The data can be undertand as `stages` or `oeuvre` flavor. This connector checks the file date and compares it to the ingestion date to decide whether to reprocess the file with LLM or not, based on the `cache_ttl_hours` setting.
+
+```yaml
+  manual:
+    connector: manual
+    enabled: true
+    url: file://data/manual_data.yaml
+    llm-processing: true
+    cache_ttl_hours: 168  # 7 days (if the file is updated within this timeframe, it will be reprocessed with LLM)
+```
+
+The required structure of the `manual_data.yaml` file is as follows:
+
+```yaml
+entities:
+  job1:
+    flavor: stages
+    category: job
+    title: "Software Engineer at XYZ"
+    description: "Worked on developing web applications using Python and React."
+    company: "XYZ"
+    start_date: "2020-01-01"
+    end_date: "2022-12-31"
+    skills: ["Python", "React", "Web Development"]
+    technologies: ["Django", "Node.js", "AWS"]
+    tags: ["Full-stack", "Remote"]
+    
+  project1:
+    flavor: oeuvre
+    category: coding
+    title: "Personal Portfolio Website"
+    description: "A personal website to showcase my projects and skills, built with Next.js and hosted on Vercel."
+    url: "https://myportfolio.com"
+    date: "2021-06-15"
+    skills: ["Web Development", "UI/UX Design"]
+    technologies: ["Next.js", "Vercel"]
+    tags: ["Portfolio", "Open Source"]
+    
+```
+
+## LLM Backend Setup
 
 **Option 1: Groq (Recommended - Fast & Free Tier)**
 

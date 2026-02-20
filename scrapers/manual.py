@@ -108,7 +108,8 @@ class ManualScraper(BaseScraper):
                 published_at = meta_date.get("content")
 
         return {
-            "type": "literature",
+            "flavor": "oeuvre",
+            "category": item.get("category", "article"),
             "title": title,
             "url": url,
             "source": self.name,

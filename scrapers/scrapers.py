@@ -156,22 +156,17 @@ class GitHubScraper:
                         updated = (time_el.get("datetime") or "")[:10]
 
                 all_repos.append({
-                    "type":        "side_project",
+                    "flavor":      "oeuvre",
+                    "category":    "coding",
                     "title":       name,
                     "description": description,
                     "url":         f"https://github.com/{self.username}/{name}",
                     "source":      "github",
                     "source_url":  url,
-                    "updated_at":  updated,
-                    "tags":        [t for t in [language] if t],
+                    "date":        updated,
+                    "technologies": [language] if language else [],
+                    "tags":        [],
                     "is_fork":     is_fork,
-                    "ext": {
-                        "repo_url":  f"https://github.com/{self.username}/{name}",
-                        "stars":     stars,
-                        "forks":     forks,
-                        "language":  language,
-                        "status":    "active",
-                    },
                 })
                 log.debug(f"  github repo: {name}")
 
@@ -239,19 +234,15 @@ class MediumScraper:
                 published = datetime(*entry.published_parsed[:3]).strftime("%Y-%m-%d")
 
             results.append({
-                "type":        "literature",
+                "flavor":      "oeuvre",
+                "category":    "article",
                 "title":       entry.get("title", ""),
                 "description": summary,
                 "url":         entry.get("link", ""),
                 "source":      "medium",
                 "source_url":  self.rss_url,
+                "date":        published,
                 "tags":        tags,
-                "ext": {
-                    "platform":     "medium",
-                    "author":       self.username,
-                    "published_at": published,
-                    "lang":         "en",
-                },
             })
         return results
 
@@ -271,13 +262,13 @@ class MediumScraper:
                 continue
             seen.add(href)
             results.append({
-                "type":   "literature",
+                "flavor":   "oeuvre",
+                "category": "article",
                 "title":  title,
                 "url":    f"https://medium.com{href}",
                 "source": "medium",
                 "source_url": self.profile_url,
                 "tags":   [],
-                "ext": {"platform": "medium", "author": self.username},
             })
         return results
 
@@ -331,19 +322,16 @@ class BlogScraper:
             lang = "en" if "/en/" in link else "de"
 
             results.append({
-                "type":        "literature",
+                "flavor":      "oeuvre",
+                "category":    "blog_post",
                 "title":       entry.get("title", ""),
                 "description": summary,
                 "url":         link,
                 "source":      "blog",
                 "source_url":  feed_url,
+                "date":        published,
                 "tags":        tags,
                 "language":    lang,
-                "ext": {
-                    "platform":     "blog",
-                    "published_at": published,
-                    "lang":         lang,
-                },
             })
         return results
 
@@ -369,18 +357,15 @@ class BlogScraper:
             lang = "en" if "/en/" in href else "de"
 
             results.append({
-                "type":     "literature",
+                "flavor":     "oeuvre",
+                "category":   "blog_post",
                 "title":    title,
                 "url":      full_url,
                 "source":   "blog",
                 "source_url": self.base_url,
+                "date":     date,
                 "language": lang,
                 "tags":     [],
-                "ext": {
-                    "platform":     "blog",
-                    "published_at": date,
-                    "lang":         lang,
-                },
             })
         return results
 
@@ -435,45 +420,27 @@ class LinkedInParser:
         for job in data.get("experience", []):
             company_title = job.get("company", "")
 
-            # Create company entity
-            co = {
-                "type":   "company",
-                "title":  company_title,
-                "source": "linkedin",
-                "tags":   job.get("tags", []),
-                "ext": {"industry": job.get("industry"), "hq": job.get("location")},
-            }
-            results.append(co)
-
-            # Create professional entity
+            # Create professional entity (job stage)
             prof = {
-                "type":       "professional",
-                "title":      f"{job.get('role', 'Role')} at {company_title}",
-                "description": job.get("description"),
-                "source":     "linkedin",
-                "start_date": job.get("start_date"),
-                "end_date":   job.get("end_date"),
-                "is_current": not bool(job.get("end_date")),
-                "tags":       job.get("tags", []),
-                "ext": {
-                    "role":            job.get("role"),
-                    "employment_type": job.get("employment_type", "full_time"),
-                    "location":        job.get("location"),
-                    "_company_title":  company_title,   # resolved to FK by seeder
-                },
+                "flavor":      "stages",
+                "category":    "job",
+                "title":       f"{job.get('role', 'Role')} at {company_title}",
+                "description": job.get('description'),
+                "source":      "linkedin",
+                "start_date":  job.get("start_date"),
+                "end_date":    job.get("end_date"),
+                "is_current":  not bool(job.get("end_date")),
+                "tags":        job.get("tags", []),
             }
             # Sub-projects within a job
             for proj in job.get("projects", []):
                 p = {
-                    "type":        "side_project",
+                    "flavor":      "oeuvre",
+                    "category":    "coding",
                     "title":       proj.get("title"),
                     "description": proj.get("description"),
                     "source":      "linkedin",
                     "tags":        proj.get("tags", []),
-                    "ext": {
-                        "status": "active",
-                        "_part_of_job": prof["title"],   # seeder resolves to relation
-                    },
                 }
                 results.append(p)
 
@@ -484,48 +451,17 @@ class LinkedInParser:
             inst_title = edu.get("institution", "")
 
             results.append({
-                "type":   "institution",
-                "title":  inst_title,
-                "source": "linkedin",
-                "ext": {
-                    "inst_type": edu.get("inst_type", "university"),
-                    "country":   edu.get("country"),
-                    "website":   edu.get("website"),
-                },
-            })
-
-            results.append({
-                "type":       "education",
-                "title":      edu.get("degree") or edu.get("title"),
+                "flavor":      "stages",
+                "category":    "education",
+                "title":       f"{edu.get('degree') or edu.get('title')} at {inst_title}",
                 "description": edu.get("description"),
-                "source":     "linkedin",
-                "start_date": edu.get("start_date"),
-                "end_date":   edu.get("end_date"),
-                "tags":       edu.get("tags", []),
-                "ext": {
-                    "degree":          edu.get("degree"),
-                    "field":           edu.get("field"),
-                    "grade":           edu.get("grade"),
-                    "exchange":        1 if edu.get("exchange") else 0,
-                    "_institution_title": inst_title,
-                },
+                "source":      "linkedin",
+                "start_date":  edu.get("start_date"),
+                "end_date":    edu.get("end_date"),
+                "tags":        edu.get("tags", []),
             })
 
-        # ── Certifications ─────────────────────────────────────────────────
-        for cert in data.get("certifications", []):
-            results.append({
-                "type":       "achievement",
-                "title":      cert.get("name"),
-                "source":     "linkedin",
-                "start_date": cert.get("issued"),
-                "tags":       cert.get("tags", []),
-                "ext": {
-                    "credential_id":  cert.get("credential_id"),
-                    "credential_url": cert.get("credential_url"),
-                    "expires_at":     cert.get("expires"),
-                    "_issuer_title":  cert.get("issuer"),
-                },
-            })
+        # Note: Certifications/achievements can be added as tags or skills in the new model
 
         log.info(f"LinkedIn: parsed {len(results)} entities")
         return results

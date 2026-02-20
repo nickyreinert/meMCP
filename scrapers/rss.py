@@ -61,7 +61,8 @@ class RSSScraper(BaseScraper):
                     pass
             
             item = {
-                "type": "literature",
+                "flavor": "oeuvre",
+                "category": "article",
                 "sub_type": "blog_post",
                 "title": title,
                 "url": link,

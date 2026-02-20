@@ -37,7 +37,7 @@ def export_to_yaml(
         db_path: Path to SQLite DB
         output_path: Where to write YAML file
         source: Filter by source (e.g., "linkedin", "medium")
-        entity_types: Filter by entity types (e.g., ["professional", "education"])
+        entity_types: Filter by entity flavors (e.g., ["stages", "oeuvre"])
     
     Returns:
         Number of entities exported
@@ -56,10 +56,10 @@ def export_to_yaml(
         
         if entity_types:
             placeholders = ",".join(["?"] * len(entity_types))
-            query += f" AND type IN ({placeholders})"
+            query += f" AND flavor IN ({placeholders})"
             params.extend(entity_types)
         
-        query += " ORDER BY type, start_date DESC NULLS LAST"
+        query += " ORDER BY flavor, category, date DESC, start_date DESC"
         
         rows = conn.execute(query, params).fetchall()
         
@@ -67,7 +67,7 @@ def export_to_yaml(
             log.warning(f"No entities found for export (source={source})")
             return 0
         
-        # Group by entity type
+        # Group by flavor/category
         grouped = _group_entities(conn, rows)
         
         # Write YAML
@@ -97,14 +97,17 @@ def _group_entities(conn: sqlite3.Connection, rows: List[sqlite3.Row]) -> Dict[s
       experience: [...]      # professional entities
       education: [...]       # education entities
       certifications: [...]  # achievement entities
-      projects: [...]        # side_project entities
-      articles: [...]        # literature entities
+      stages_jobs: [...]     # stages/job entities
+      stages_education: [...] # stages/education entities
+      oeuvre_coding: [...]    # oeuvre/coding entities
+      oeuvre_articles: [...]  # oeuvre/article entities
     """
     result = {}
     
     for row in rows:
         entity = dict(row)
-        entity_type = entity["type"]
+        flavor = entity.get("flavor", "unknown")
+        category = entity.get("category", "uncategorized")
         entity_id = entity["id"]
         
         # Fetch tags
@@ -114,37 +117,31 @@ def _group_entities(conn: sqlite3.Connection, rows: List[sqlite3.Row]) -> Dict[s
         ).fetchall()
         
         tags = [t["tag"] for t in tags_raw if t["tag_type"] == "generic"]
-        tech_tags = [t["tag"] for t in tags_raw if t["tag_type"] == "technology"]
-        capability_tags = [t["tag"] for t in tags_raw if t["tag_type"] == "capability"]
+        technologies = [t["tag"] for t in tags_raw if t["tag_type"] == "technology"]
+        skills = [t["tag"] for t in tags_raw if t["tag_type"] == "skill"]
         
-        # Fetch extension data based on type
-        ext_data = _fetch_extension(conn, entity_id, entity_type)
+        # Format entity for YAML export
+        formatted = {
+            "title": entity["title"],
+            "description": entity.get("description"),
+            "url": entity.get("url"),
+            "source": entity.get("source"),
+            "source_url": entity.get("source_url"),
+            "start_date": entity.get("start_date"),
+            "end_date": entity.get("end_date"),
+            "date": entity.get("date"),
+            "is_current": bool(entity.get("is_current")),
+            "tags": tags,
+            "technologies": technologies,
+            "skills": skills,
+        }
         
-        # Format based on entity type
-        if entity_type == "professional":
-            formatted = _format_professional(entity, ext_data, tags, tech_tags, capability_tags)
-            result.setdefault("experience", []).append(formatted)
+        # Remove None values
+        formatted = {k: v for k, v in formatted.items() if v is not None}
         
-        elif entity_type == "education":
-            formatted = _format_education(entity, ext_data, tags)
-            result.setdefault("education", []).append(formatted)
-        
-        elif entity_type == "achievement":
-            formatted = _format_achievement(entity, ext_data, tags)
-            result.setdefault("certifications", []).append(formatted)
-        
-        elif entity_type == "side_project":
-            formatted = _format_project(entity, ext_data, tags, tech_tags)
-            result.setdefault("projects", []).append(formatted)
-        
-        elif entity_type == "literature":
-            formatted = _format_literature(entity, ext_data, tags)
-            result.setdefault("articles", []).append(formatted)
-        
-        elif entity_type in ("company", "institution"):
-            # Export companies/institutions separately if needed
-            formatted = _format_basic_entity(entity, ext_data, tags)
-            result.setdefault(f"{entity_type}s", []).append(formatted)
+        # Key by flavor_category
+        key = f"{flavor}_{category}" if category != "uncategorized" else flavor
+        result.setdefault(key, []).append(formatted)
     
     return result
 

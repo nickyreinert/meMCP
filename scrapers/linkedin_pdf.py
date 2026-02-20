@@ -193,21 +193,10 @@ class LinkedInPDFParser:
         for job in data.get("experience", []):
             company_title = job.get("company", "")
 
-            # Company entity
+            # Professional entity (stages/job)
             results.append({
-                "type": "company",
-                "title": company_title,
-                "source": "linkedin_pdf",
-                "tags": job.get("tags", []),
-                "ext": {
-                    "industry": job.get("industry"),
-                    "hq": job.get("location")
-                },
-            })
-
-            # Professional entity
-            results.append({
-                "type": "professional",
+                "flavor": "stages",
+                "category": "job",
                 "title": f"{job.get('role', 'Role')} at {company_title}",
                 "description": job.get("description"),
                 "source": "linkedin_pdf",
@@ -215,12 +204,6 @@ class LinkedInPDFParser:
                 "end_date": job.get("end_date"),
                 "is_current": not bool(job.get("end_date")),
                 "tags": job.get("tags", []),
-                "ext": {
-                    "role": job.get("role"),
-                    "employment_type": job.get("employment_type", "full_time"),
-                    "location": job.get("location"),
-                    "_company_title": company_title,
-                },
             })
 
         # Education
@@ -228,42 +211,16 @@ class LinkedInPDFParser:
             inst_title = edu.get("institution", "")
 
             results.append({
-                "type": "institution",
-                "title": inst_title,
-                "source": "linkedin_pdf",
-                "ext": {
-                    "inst_type": edu.get("inst_type", "university"),
-                    "country": edu.get("country"),
-                },
-            })
-
-            results.append({
-                "type": "education",
-                "title": edu.get("degree") or edu.get("title", ""),
+                "flavor": "stages",
+                "category": "education",
+                "title": f"{edu.get('degree') or edu.get('title', '')} at {inst_title}",
                 "description": edu.get("description"),
                 "source": "linkedin_pdf",
                 "start_date": edu.get("start_date"),
                 "end_date": edu.get("end_date"),
                 "tags": edu.get("tags", []),
-                "ext": {
-                    "degree": edu.get("degree"),
-                    "field": edu.get("field"),
-                    "_institution_title": inst_title,
-                },
             })
 
-        # Certifications
-        for cert in data.get("certifications", []):
-            results.append({
-                "type": "achievement",
-                "title": cert.get("name"),
-                "source": "linkedin_pdf",
-                "start_date": cert.get("issued"),
-                "ext": {
-                    "credential_id": cert.get("credential_id"),
-                    "credential_url": cert.get("credential_url"),
-                    "_issuer_title": cert.get("issuer"),
-                },
-            })
+        # Note: Certifications/achievements skipped in simplified model
 
         return results

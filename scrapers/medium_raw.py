@@ -148,7 +148,8 @@ class MediumRawScraper(BaseScraper):
             
             # Create article entity
             article = {
-                "type": "literature",
+                "flavor": "oeuvre",
+                "category": "article",
                 "sub_type": self.config.get("sub_type_override", "article"),
                 "title": title or "Untitled",
                 "url": article_url,

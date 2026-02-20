@@ -51,23 +51,15 @@ class GithubScraper(BaseScraper):
 
             # Basic mapping
             item = {
-                "type": "side_project", # Or 'project'
+                "flavor": "oeuvre",
+                "category": "coding",
                 "title": repo.get("name"),
                 "description": repo.get("description") or "",
                 "url": repo_url,
                 "source": self.name,
                 "source_url": repo_url,
-                "created_at": repo.get("created_at"),
-                "updated_at": repo.get("updated_at"),
-                "tags": [repo.get("language")] if repo.get("language") else [],
-                "ext": {
-                    "repo_url": repo_url,
-                    "stars": repo.get("stargazers_count", 0),
-                    "forks": repo.get("forks_count", 0),
-                    "license": repo.get("license", {}).get("name") if repo.get("license") else None,
-                    "language": repo.get("language"),
-                    "status": "active" if not repo.get("archived") else "archived"
-                }
+                "date": repo.get("created_at"),
+                "technologies": [repo.get("language")] if repo.get("language") else [],
             }
             
             # Fetch generic README if requested

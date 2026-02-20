@@ -58,14 +58,14 @@ from slowapi.errors import RateLimitExceeded
 
 from db.models import (
     DB_PATH, get_db, init_db,
-    get_entity, list_entities, get_related,
+    get_entity, list_entities,
     list_all_tags,
     get_translation, get_greeting_translation,
     apply_translation, SUPPORTED_LANGS, DEFAULT_LANG,
     query_skills, query_skill_detail,
     query_technologies, query_technology_detail,
-    query_stages, query_stage_detail,
-    query_oeuvre, query_oeuvre_detail,
+    query_stages,
+    query_oeuvre,
 )
 
 
@@ -348,7 +348,7 @@ async def greeting(
     """
     resolved = resolve_lang(lang, accept_language)
 
-    person_rows = list_entities(conn, types=["person"], limit=1)
+    person_rows = list_entities(conn, flavor="personal", limit=1)
     if not person_rows:
         raise HTTPException(404, "Person entity not found — run the seeder first.")
     person = person_rows[0]
@@ -392,24 +392,25 @@ async def greeting(
 
 # ── Categories ────────────────────────────────────────────────────────────────
 
-@app.get("/categories", summary="Entity types + counts")
+@app.get("/categories", summary="Entity flavors + counts")
 @limiter.limit("30/minute")
 async def categories(request: Request, conn=Depends(db)):
     rows = conn.execute("""
-        SELECT type, COUNT(*) as count FROM entities
+        SELECT flavor, category, COUNT(*) as count FROM entities
         WHERE visibility='public'
-        GROUP BY type ORDER BY count DESC
+        GROUP BY flavor, category ORDER BY flavor, count DESC
     """).fetchall()
-    cats = []
+    result = {"flavors": {}, "total": 0}
     for row in rows:
-        meta = ENTITY_META.get(row["type"], {"label": row["type"], "description": ""})
-        cats.append({
-            "type":        row["type"],
-            "label":       meta["label"],
-            "description": meta["description"],
-            "count":       row["count"],
-        })
-    return ok({"categories": cats})
+        flavor = row["flavor"]
+        category = row["category"] or "uncategorized"
+        count = row["count"]
+        if flavor not in result["flavors"]:
+            result["flavors"][flavor] = {"total": 0, "categories": {}}
+        result["flavors"][flavor]["categories"][category] = count
+        result["flavors"][flavor]["total"] += count
+        result["total"] += count
+    return ok(result)
 
 
 # ── Entities list ─────────────────────────────────────────────────────────────
@@ -419,7 +420,8 @@ async def categories(request: Request, conn=Depends(db)):
 async def entities_list(
     request: Request,
     conn=Depends(db),
-    type: Optional[str]            = Query(None, description="Filter by entity type"),
+    flavor: Optional[str]          = Query(None, description="Filter by flavor: personal|stages|oeuvre"),
+    category: Optional[str]        = Query(None, description="Filter by category"),
     tags: Optional[str]            = Query(None, description="Comma-separated tags"),
     source: Optional[str]          = Query(None, description="Filter by source"),
     search: Optional[str]          = Query(None, description="Full-text search"),
@@ -430,19 +432,21 @@ async def entities_list(
 ):
     resolved  = resolve_lang(lang, accept_language)
     tag_list  = [t.strip() for t in tags.split(",")] if tags else None
-    type_list = [type] if type else None
 
     rows = list_entities(
-        conn, types=type_list, tags=tag_list,
+        conn, flavor=flavor, category=category, tags=tag_list,
         source=source, search=search, limit=limit, offset=offset,
     )
     rows = _localise_many(conn, rows, resolved)
 
     count_sql = "SELECT COUNT(DISTINCT id) FROM entities WHERE visibility='public'"
     count_params = []
-    if type:
-        count_sql += " AND type=?"
-        count_params.append(type)
+    if flavor:
+        count_sql += " AND flavor=?"
+        count_params.append(flavor)
+    if category:
+        count_sql += " AND category=?"
+        count_params.append(category)
     total = conn.execute(count_sql, count_params).fetchone()[0]
 
     return ok(
@@ -476,9 +480,9 @@ async def entity_detail(
 
     entity = _localise(conn, entity, resolved)
 
+    # Relations removed in simplified model
     if include_relations:
-        related = get_related(conn, entity_id)
-        entity["relations"] = _localise_many(conn, related, resolved)
+        entity["relations"] = []
 
     return ok(entity, meta=_lang_meta(resolved))
 
@@ -501,23 +505,22 @@ async def entity_related(
     if not conn.execute("SELECT id FROM entities WHERE id=?", (entity_id,)).fetchone():
         return err(f"Entity '{entity_id}' not found", 404)
 
-    related = get_related(conn, entity_id, rel_type=rel_type, direction=direction)
-    related = _localise_many(conn, related, resolved)
-
+    # Relations removed in simplified model
     return ok(
-        {"entity_id": entity_id, "related": related, "count": len(related)},
+        {"entity_id": entity_id, "message": "Relations not supported in simplified model", "related": []},
         meta=_lang_meta(resolved),
     )
 
 
 # ── Category ──────────────────────────────────────────────────────────────────
 
-@app.get("/category/{entity_type}", summary="Entities by type (translated)")
+@app.get("/category/{entity_flavor}", summary="Entities by flavor (translated)")
 @limiter.limit("30/minute")
 async def category(
     request: Request,
-    entity_type: str,
+    entity_flavor: str,
     conn=Depends(db),
+    category: Optional[str]        = Query(None, description="Further filter by category"),
     tags: Optional[str]            = Query(None, description="Comma-separated tag filter"),
     search: Optional[str]          = Query(None),
     limit: int                     = Query(50, ge=1, le=100),
@@ -525,23 +528,19 @@ async def category(
     lang: Optional[str]            = Query(None),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
 ):
-    if entity_type not in ENTITY_META:
-        return err(
-            f"Unknown entity type '{entity_type}'. Valid: {list(ENTITY_META.keys())}", 400
-        )
     resolved = resolve_lang(lang, accept_language)
     tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
     rows = list_entities(
-        conn, types=[entity_type], tags=tag_list,
+        conn, flavor=entity_flavor, category=category, tags=tag_list,
         search=search, limit=limit, offset=offset,
     )
     rows = _localise_many(conn, rows, resolved)
 
     return ok(
         {
-            "type":    entity_type,
-            "label":   ENTITY_META[entity_type]["label"],
+            "flavor":  entity_flavor,
+            "category": category,
             "entries": rows,
             "count":   len(rows),
         },
@@ -573,9 +572,8 @@ async def search(
 ):
     """Searches base (English) text; returns results localised into requested lang."""
     resolved  = resolve_lang(lang, accept_language)
-    type_list = [type] if type else None
 
-    rows = list_entities(conn, types=type_list, search=q, limit=limit)
+    rows = list_entities(conn, search=q, limit=limit)
     rows = _localise_many(conn, rows, resolved)
 
     return ok(
@@ -672,8 +670,8 @@ async def skill_detail(
     if not detail["entities"]:
         return err(f"No entities found with skill '{skill_name}'", 404)
     detail["entities"] = _localise_many(conn, detail["entities"], resolved)
-    for key in detail["by_type"]:
-        detail["by_type"][key] = _localise_many(conn, detail["by_type"][key], resolved)
+    for key in detail["by_flavor"]:
+        detail["by_flavor"][key] = _localise_many(conn, detail["by_flavor"][key], resolved)
     return ok(detail, meta=_lang_meta(resolved))
 
 
@@ -720,8 +718,8 @@ async def technology_detail(
     if not detail["entities"] and not detail["tech_entity"]:
         return err(f"Technology '{tech_name}' not found", 404)
     detail["entities"] = _localise_many(conn, detail["entities"], resolved)
-    for key in detail["by_type"]:
-        detail["by_type"][key] = _localise_many(conn, detail["by_type"][key], resolved)
+    for key in detail["by_flavor"]:
+        detail["by_flavor"][key] = _localise_many(conn, detail["by_flavor"][key], resolved)
     return ok(detail, meta=_lang_meta(resolved))
 
 
@@ -732,12 +730,9 @@ async def technology_detail(
 async def stages_list(
     request: Request,
     conn=Depends(db),
-    sub_type: Optional[str] = Query(
+    category: Optional[str] = Query(
         None,
-        description=(
-            "Filter by sub_type: full_time | part_time | contract | freelance | intern "
-            "| university | school | bootcamp | online | exchange"
-        ),
+        description="Filter by category: education | job",
     ),
     lang: Optional[str]            = Query(None, description="en | de"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
@@ -745,19 +740,18 @@ async def stages_list(
     """
     Returns the complete career and education timeline — every job, role,
     degree, and course. Each stage includes:
-      - title, type, sub_type
+      - title, flavor, category
       - start_date / end_date  (ISO-8601)
       - is_current flag
       - skills: list of competencies applied or learned
       - technologies: list of tools/frameworks used
-      - ext: typed extension (company_id, role, degree, field, etc.)
       - url + source
 
-    Ordered newest-first. Filter by sub_type for just jobs or just education.
-    Use /stages/{id} for full detail with relations.
+    Ordered newest-first. Filter by category for just jobs or just education.
+    Use /stages/{id} for full detail.
     """
     resolved = resolve_lang(lang, accept_language)
-    stages = query_stages(conn, sub_type=sub_type)
+    stages = query_stages(conn, category=category)
     stages = _localise_many(conn, stages, resolved)
     return ok(
         {"stages": stages, "count": len(stages)},
@@ -781,12 +775,13 @@ async def stage_detail(
       - Related entities (company, institution, connected projects)
     """
     resolved = resolve_lang(lang, accept_language)
-    detail = query_stage_detail(conn, entity_id)
-    if not detail:
-        return err(f"Stage '{entity_id}' not found or not a professional/education entity", 404)
+    detail = get_entity(conn, entity_id)
+    if not detail or detail.get("flavor") != "stages":
+        raise HTTPException(404, "Stage not found")
+    
+    # Apply translation
     detail = _localise(conn, detail, resolved)
-    if detail.get("related"):
-        detail["related"] = _localise_many(conn, detail["related"], resolved)
+    
     return ok(detail, meta=_lang_meta(resolved))
 
 
@@ -797,12 +792,9 @@ async def stage_detail(
 async def oeuvre_list(
     request: Request,
     conn=Depends(db),
-    sub_type: Optional[str] = Query(
+    category: Optional[str] = Query(
         None,
-        description=(
-            "Filter by sub_type: github_repo | blog_post | article | "
-            "book | podcast | open_source"
-        ),
+        description="Filter by category: coding | blog_post | article | book | website",
     ),
     lang: Optional[str]            = Query(None, description="en | de"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
@@ -810,18 +802,17 @@ async def oeuvre_list(
     """
     Returns all oeuvre: GitHub projects, blog posts, Medium articles,
     books, podcasts. Each item includes:
-      - title, sub_type, description
+      - title, category, description
       - url (direct link to the work)
       - source (github | medium | blog | manual)
-      - start_date (publish date or repo creation)
+      - date (publish date or repo creation)
       - skills: competencies this work demonstrates
       - technologies: tools used or discussed
-      - ext: extended data (stars, forks, platform, etc.)
 
-    Use /oeuvre/{id} for full detail including related career stages.
+    Use /oeuvre/{id} for full detail.
     """
     resolved = resolve_lang(lang, accept_language)
-    items = query_oeuvre(conn, sub_type=sub_type)
+    items = query_oeuvre(conn, category=category)
     items = _localise_many(conn, items, resolved)
     return ok(
         {"oeuvre": items, "count": len(items)},
@@ -847,12 +838,11 @@ async def oeuvre_detail(
       - Source URL and any related URLs
     """
     resolved = resolve_lang(lang, accept_language)
-    detail = query_oeuvre_detail(conn, entity_id)
-    if not detail:
-        return err(f"Oeuvre item '{entity_id}' not found or not a project/literature entity", 404)
+    detail = get_entity(conn, entity_id)
+    if not detail or detail.get("flavor") != "oeuvre":
+        raise HTTPException(404, "Oeuvre item not found")
+    
+    # Apply translation
     detail = _localise(conn, detail, resolved)
-    if detail.get("related"):
-        detail["related"] = _localise_many(conn, detail["related"], resolved)
-    if detail.get("related_stages"):
-        detail["related_stages"] = _localise_many(conn, detail["related_stages"], resolved)
+    
     return ok(detail, meta=_lang_meta(resolved))

@@ -129,7 +129,8 @@ class SitemapScraper(BaseScraper):
                     published_at = meta_date.get_text(strip=True)
 
         return {
-            "type": "literature",
+            "flavor": "oeuvre",
+            "category": "article",
             "title": title,
             "url": url,
             "source": self.name,
