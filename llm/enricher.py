@@ -31,6 +31,17 @@ except ImportError:
 
 import requests
 
+# Common English stop words for text shrinking
+STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he",
+    "in", "is", "it", "its", "of", "on", "that", "the", "to", "was", "will", "with",
+    "am", "can", "do", "does", "had", "have", "her", "here", "him", "his", "how",
+    "i", "if", "into", "may", "me", "more", "my", "no", "not", "or", "our", "out",
+    "over", "said", "she", "so", "some", "than", "their", "them", "then", "there",
+    "these", "they", "this", "those", "through", "up", "was", "we", "were", "what",
+    "when", "where", "which", "who", "why", "would", "you", "your"
+}
+
 
 class LLMEnricher:
 
@@ -38,6 +49,8 @@ class LLMEnricher:
         self.backend   = cfg.get("backend", "none")
         self.model     = cfg.get("model", "llama3-8b-8192")
         self.ollama_url = cfg.get("ollama_url", "http://localhost:11434")
+        self.shrink_enabled = cfg.get("shrink_text", False)
+        self.shrink_skip_chars = cfg.get("shrink_skip_chars", 3)
         self._groq: Optional[object] = None
         self._call_count = 0
         self._error_count = 0
@@ -60,6 +73,9 @@ class LLMEnricher:
 
         else:
             log.info("LLM: disabled (backend=none)")
+        
+        if self.shrink_enabled:
+            log.info(f"LLM: Text shrinking enabled (skip every {self.shrink_skip_chars} chars)")
 
     # ── Public methods ────────────────────────────────────────────────────────
 
@@ -67,7 +83,14 @@ class LLMEnricher:
         """Turn raw scraped text into a clean description."""
         if not self._ready() or not raw_text.strip():
             return raw_text.strip()[:500]
-        prompt = f"Context: {context}\n\nRaw text:\n{raw_text[:1200]}"
+        
+        # Apply text shrinking if enabled
+        text_to_send = raw_text[:1200]
+        if self.shrink_enabled:
+            text_to_send = self._shrink_text(text_to_send, self.shrink_skip_chars)
+            log.debug(f"Text shrunk: {len(raw_text[:1200])} → {len(text_to_send)} chars")
+        
+        prompt = f"Context: {context}\n\nRaw text:\n{text_to_send}"
         return self._call(DESCRIPTION_SYSTEM, prompt, max_tokens=100) or raw_text.strip()[:500]
 
     def suggest_tags(self, text: str) -> list[str]:
@@ -78,6 +101,59 @@ class LLMEnricher:
         if not result:
             return []
         return [t.strip() for t in result.split(",") if t.strip()]
+
+    def enrich(self, raw_text: str, flavor: str, category: Optional[str] = None) -> Optional[dict]:
+        """
+        Enrich entity with LLM: description + tags extraction.
+        Returns dict with: description, technologies, skills, tags.
+        """
+        if not self._ready() or not raw_text.strip():
+            return None
+        
+        context = f"{flavor}"
+        if category:
+            context = f"{flavor}/{category}"
+        
+        # Enrich description
+        description = self.enrich_description(raw_text, context=context)
+        
+        # Suggest tags
+        all_tags = self.suggest_tags(raw_text)
+        
+        # Categorize tags (simple heuristic)
+        technologies = []
+        skills = []
+        tags = []
+        
+        tech_keywords = {
+            "python", "javascript", "typescript", "java", "c++", "c#", "ruby", "go", "rust",
+            "react", "vue", "angular", "django", "flask", "fastapi", "nodejs", "express",
+            "postgresql", "mysql", "mongodb", "redis", "docker", "kubernetes", "aws", "gcp",
+            "azure", "git", "github", "gitlab", "tensorflow", "pytorch", "scikit-learn",
+            "pandas", "numpy", "sql", "html", "css", "sass", "webpack", "vite"
+        }
+        
+        skill_keywords = {
+            "leadership", "management", "communication", "problem-solving", "teamwork",
+            "data analysis", "machine learning", "design", "testing", "debugging",
+            "architecture", "api design", "database design", "ui/ux", "agile", "scrum"
+        }
+        
+        for tag in all_tags:
+            tag_lower = tag.lower()
+            if any(kw in tag_lower for kw in tech_keywords):
+                technologies.append(tag)
+            elif any(kw in tag_lower for kw in skill_keywords):
+                skills.append(tag)
+            else:
+                tags.append(tag)
+        
+        return {
+            "description": description,
+            "technologies": technologies,
+            "skills": skills,
+            "tags": tags,
+        }
 
     def classify_type(self, text: str) -> Optional[str]:
         """Guess the entity type from raw text."""
@@ -102,6 +178,27 @@ class LLMEnricher:
 
     def _ready(self) -> bool:
         return self.backend in ("groq", "ollama")
+    
+    def _shrink_text(self, text: str, n_skip: int) -> str:
+        """
+        Reduce text size by removing stop words and every nth character.
+        Preserves structure and keywords better than simple truncation.
+        """
+        # Step 1: Filter stop words
+        words = text.split()
+        filtered_words = [w for w in words if w.lower().strip('.,!?;:') not in STOP_WORDS]
+        joined = ' '.join(filtered_words)
+        
+        # Step 2: Character decimation (skip every nth char)
+        if n_skip > 1 and len(joined) > 100:
+            chars = []
+            for i, char in enumerate(joined):
+                # Keep every nth character, but preserve spaces and word boundaries
+                if i % n_skip != 0 or char.isspace():
+                    chars.append(char)
+            return ''.join(chars)
+        
+        return joined
 
     def _call(self, system: str, user: str, max_tokens: int = 100,
               retries: int = 2) -> Optional[str]:

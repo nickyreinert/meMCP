@@ -5,17 +5,17 @@ A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves y
 ## Features
 
 - Multi-language support (EN, DE)
-- Aggregates data from GitHub, Medium, RSS feeds, and LinkedIn
-- LLM-powered content extraction
+- Aggregates data from GitHub, Medium, RSS feeds, Sitemaps, LinkedIn, by plain HTML scraping or manual YAML files
+- LLM-powered content extraction and enrichment (e.g., summarization, tag extraction, skill/technology classification)
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
 
 ## Data Model
 
-The MCP differentiates stores all information as entities. There are three main types (`flavor` of entities):
+The MCP stores information as **entities**. There are **three** main types (`flavor` of entities):
 
 - `personal` - Static information about you (name, bio, greetings, contact details, etc.)
-- `stages` - Career stages (education, jobs, projects, publications, etc.) with timeframes and descriptions
+- `stages` - Career stages (education, jobs, projects, etc.) with timeframes and descriptions
 - `oeuvre` - Your work (code repos, articles, books, talks, etc.) with metadata and links
 
 Entities carry additional meta data, like:
@@ -29,9 +29,10 @@ Entities carry additional meta data, like:
 - `llm_enriched` - boolean flag indicating whether the entity has been enriched with LLM-generated content (e.g., description)
 - `llm_model` - the name of the LLM model used for enrichment, if applicable (e.g., "mistral-small:24b-instruct-2501-q4_K_M")
 
-Each entity of `stages` can be classified into two `categories`:
+Each entity of `stages` can be classified into three `categories`:
 - `education`
 - `job`
+- `other` (specified in the `description` field)
 
 Entities of `oeuvre` can be classified into:
 - `coding`
@@ -43,20 +44,19 @@ Entities of `oeuvre` can be classified into:
 
 Besides that `stages` and `oeuvre` entities can be further classified to identify **technologies**, **skills** and **general tags**. 
 
-`technologies` can be
+`technologies` describe **what you worked with** in a specific way:
 - Programming languages (Python, JavaScript, etc.)
 - Frameworks (React, Django, etc.)
 - Tools (Docker, Git, etc.)
 
-`skills` are more about your capabilities and expertise, like
+`skills` described **what you did** in a more general way, like
 - Data Analysis
 - Project Management
 - Public Speaking
 - System Operations
 
-And finally `tags` describe the content in a more general way, like
-- AI
-- Web Development
+And finally `tags` tries to capute general attributes that are not covered by the other two, like:
+- Maze Runner
 - Open Source
 
 ## Quick Start

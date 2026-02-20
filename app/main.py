@@ -64,8 +64,10 @@ from db.models import (
     apply_translation, SUPPORTED_LANGS, DEFAULT_LANG,
     query_skills, query_skill_detail,
     query_technologies, query_technology_detail,
+    query_tag_detail,
     query_stages,
     query_oeuvre,
+    query_graph,
 )
 
 
@@ -557,6 +559,30 @@ async def tags_route(request: Request, conn=Depends(db)):
     return ok({"tags": all_tags, "count": len(all_tags)})
 
 
+@app.get("/tags/{tag_name}", summary="Entities with a specific generic tag")
+@limiter.limit("30/minute")
+async def tag_detail(
+    request: Request,
+    tag_name: str,
+    conn=Depends(db),
+    lang: Optional[str]            = Query(None, description="en | de"),
+    accept_language: Optional[str] = Header(None, alias="Accept-Language"),
+):
+    """
+    Returns all entities that have a specific generic tag.
+    Generic tags include: industry sectors, topics, methodologies, etc.
+    Entity titles/descriptions are localised.
+    """
+    resolved = resolve_lang(lang, accept_language)
+    detail = query_tag_detail(conn, tag_name)
+    if not detail["entities"]:
+        return err(f"Tag '{tag_name}' not found or has no entities", 404)
+    detail["entities"] = _localise_many(conn, detail["entities"], resolved)
+    for key in detail["by_flavor"]:
+        detail["by_flavor"][key] = _localise_many(conn, detail["by_flavor"][key], resolved)
+    return ok(detail, meta=_lang_meta(resolved))
+
+
 # ── Search ────────────────────────────────────────────────────────────────────
 
 @app.get("/search", summary="Full-text search (translated results)")
@@ -584,41 +610,35 @@ async def search(
 
 # ── Relation graph ────────────────────────────────────────────────────────────
 
-@app.get("/graph", summary="Relation graph query")
+@app.get("/graph", summary="Entity-tag graph visualization")
 @limiter.limit("20/minute")
 async def graph(
     request: Request,
     conn=Depends(db),
-    from_id: Optional[str]  = Query(None, description="Source entity ID"),
-    to_id: Optional[str]    = Query(None, description="Target entity ID"),
-    rel_type: Optional[str] = Query(None, description="Relation type filter"),
-    limit: int              = Query(50, ge=1, le=200),
 ):
-    """Query the relation graph. Supply at least one filter parameter."""
-    if not from_id and not to_id and not rel_type:
-        return err("Provide at least one of: from_id, to_id, rel_type")
-
-    where, params = [], []
-    if from_id:
-        where.append("r.from_id=?");  params.append(from_id)
-    if to_id:
-        where.append("r.to_id=?");    params.append(to_id)
-    if rel_type:
-        where.append("r.rel_type=?"); params.append(rel_type)
-
-    sql = f"""
-        SELECT r.id, r.from_id, r.to_id, r.rel_type, r.weight, r.note,
-               ef.title as from_title, ef.type as from_type,
-               et.title as to_title,   et.type as to_type
-        FROM relations r
-        JOIN entities ef ON ef.id = r.from_id
-        JOIN entities et ON et.id = r.to_id
-        WHERE {' AND '.join(where)}
-        ORDER BY r.weight DESC LIMIT ?
     """
-    params.append(limit)
-    rows = conn.execute(sql, params).fetchall()
-    return ok({"edges": [dict(r) for r in rows], "count": len(rows)})
+    Returns the complete entity-tag graph as nodes and links for visualization.
+    Nodes include all entities (with flavor/category) and all tags (with tag_type).
+    Links represent entity-to-tag relationships.
+    
+    Response format:
+      {
+        "nodes": [
+          {"id": entity_id, "label": title, "type": "entity", "flavor": ..., "category": ...},
+          {"id": "tag:Python", "label": "Python", "type": "tag", "tag_type": "technology"}
+        ],
+        "links": [
+          {"source": entity_id, "target": "tag:Python", "type": "tagged"}
+        ]
+      }
+    """
+    graph_data = query_graph(conn)
+    return ok({
+        "nodes": graph_data["nodes"],
+        "links": graph_data["links"],
+        "node_count": len(graph_data["nodes"]),
+        "link_count": len(graph_data["links"])
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -734,6 +754,18 @@ async def stages_list(
         None,
         description="Filter by category: education | job",
     ),
+    tag: Optional[str] = Query(
+        None,
+        description="Filter by generic tag",
+    ),
+    skill: Optional[str] = Query(
+        None,
+        description="Filter by skill tag",
+    ),
+    technology: Optional[str] = Query(
+        None,
+        description="Filter by technology tag",
+    ),
     lang: Optional[str]            = Query(None, description="en | de"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
 ):
@@ -748,10 +780,11 @@ async def stages_list(
       - url + source
 
     Ordered newest-first. Filter by category for just jobs or just education.
+    Filter by tag/skill/technology to find stages with specific attributes.
     Use /stages/{id} for full detail.
     """
     resolved = resolve_lang(lang, accept_language)
-    stages = query_stages(conn, category=category)
+    stages = query_stages(conn, category=category, tag=tag, skill=skill, technology=technology)
     stages = _localise_many(conn, stages, resolved)
     return ok(
         {"stages": stages, "count": len(stages)},
@@ -796,6 +829,18 @@ async def oeuvre_list(
         None,
         description="Filter by category: coding | blog_post | article | book | website",
     ),
+    tag: Optional[str] = Query(
+        None,
+        description="Filter by generic tag",
+    ),
+    skill: Optional[str] = Query(
+        None,
+        description="Filter by skill tag",
+    ),
+    technology: Optional[str] = Query(
+        None,
+        description="Filter by technology tag",
+    ),
     lang: Optional[str]            = Query(None, description="en | de"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
 ):
@@ -810,9 +855,10 @@ async def oeuvre_list(
       - technologies: tools used or discussed
 
     Use /oeuvre/{id} for full detail.
+    Filter by tag/skill/technology to find work with specific attributes.
     """
     resolved = resolve_lang(lang, accept_language)
-    items = query_oeuvre(conn, category=category)
+    items = query_oeuvre(conn, category=category, tag=tag, skill=skill, technology=technology)
     items = _localise_many(conn, items, resolved)
     return ok(
         {"oeuvre": items, "count": len(items)},

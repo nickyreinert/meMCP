@@ -189,3 +189,153 @@ class Seeder:
         eid = upsert_entity(conn, entity)
         log.debug(f"  {flavor}/{item.get('category', 'N/A')}: {title} ({eid[:8]})")
         return eid
+
+    # --- LLM POST-PROCESSING ---
+
+    def enrich_entity(self, entity_id: str, force: bool = False) -> bool:
+        """
+        Enrich a single entity with LLM post-processing.
+        Returns True if enriched successfully.
+        """
+        if not self.llm:
+            log.warning("LLM not configured, skipping enrichment")
+            return False
+
+        conn = get_db(self.db_path)
+        try:
+            # Fetch entity
+            row = conn.execute(
+                """SELECT id, flavor, category, title, description, 
+                   llm_enriched, source, url FROM entities WHERE id=?""",
+                (entity_id,)
+            ).fetchone()
+
+            if not row:
+                log.error(f"Entity {entity_id} not found")
+                return False
+
+            entity = dict(row)
+
+            # Skip if already enriched (unless forced)
+            if entity.get("llm_enriched") and not force:
+                log.debug(f"Entity {entity_id} already enriched, skipping")
+                return False
+
+            # Check if source has LLM processing enabled
+            source_name = entity.get("source")
+            if source_name and self.config:
+                source_cfg = self.config.get("oeuvre_sources", {}).get(source_name, {}) or \
+                             self.config.get("stages", {})
+                if source_cfg and not source_cfg.get("llm-processing", True):
+                    log.debug(f"Source {source_name} has llm-processing disabled")
+                    return False
+
+            # Enrich with LLM
+            flavor = entity.get("flavor")
+            if flavor not in ("stages", "oeuvre"):
+                log.debug(f"Skipping enrichment for flavor: {flavor}")
+                return False
+
+            # Use description or URL as input text
+            raw_text = entity.get("description", "") or entity.get("url", "")
+            if not raw_text or len(raw_text) < 10:
+                log.debug(f"Insufficient text for enrichment: {entity_id}")
+                return False
+
+            # Call LLM enrichment
+            enrichment = self.llm.enrich(raw_text, flavor, entity.get("category"))
+            if not enrichment:
+                log.warning(f"LLM enrichment failed for {entity_id}")
+                return False
+
+            # Update entity
+            from db.models import now_iso
+            conn.execute(
+                """UPDATE entities SET 
+                   description = ?,
+                   llm_enriched = 1,
+                   llm_enriched_at = ?,
+                   llm_model = ?,
+                   updated_at = ?
+                   WHERE id = ?""",
+                (
+                    enrichment.get("description") or entity.get("description"),
+                    now_iso(),
+                    self.llm.model,
+                    now_iso(),
+                    entity_id
+                )
+            )
+
+            # Update tags
+            for tag_type, tags in [
+                ("technology", enrichment.get("technologies", [])),
+                ("skill", enrichment.get("skills", [])),
+                ("generic", enrichment.get("tags", []))
+            ]:
+                for tag in tags:
+                    normalized = norm_tag(tag)
+                    conn.execute(
+                        """INSERT OR IGNORE INTO tags (entity_id, tag, tag_type) 
+                           VALUES (?, ?, ?)""",
+                        (entity_id, normalized, tag_type)
+                    )
+
+            conn.commit()
+            log.info(f"Enriched entity: {entity.get('title')} ({entity_id[:8]})")
+            return True
+
+        except Exception as e:
+            log.error(f"Failed to enrich entity {entity_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def enrich_all(self, source: Optional[str] = None, batch_size: int = 50) -> int:
+        """
+        Enrich all unenriched entities with LLM.
+        Returns count of successfully enriched entities.
+        """
+        if not self.llm:
+            log.warning("LLM not configured, skipping enrichment")
+            return 0
+
+        conn = get_db(self.db_path)
+        try:
+            # Find entities needing enrichment
+            query = """SELECT id FROM entities 
+                       WHERE (llm_enriched = 0 OR llm_enriched IS NULL)
+                       AND flavor IN ('stages', 'oeuvre')"""
+            params = []
+
+            if source:
+                query += " AND source = ?"
+                params.append(source)
+
+            query += f" LIMIT {batch_size}"
+
+            entity_ids = [row[0] for row in conn.execute(query, params).fetchall()]
+
+            if not entity_ids:
+                log.info("No entities needing enrichment")
+                return 0
+
+            log.info(f"Found {len(entity_ids)} entities needing enrichment")
+
+            count = 0
+            for i, entity_id in enumerate(entity_ids, 1):
+                log.info(f"Processing {i}/{len(entity_ids)}: {entity_id[:8]}")
+                if self.enrich_entity(entity_id):
+                    count += 1
+
+                # Rate limiting for API calls
+                if count > 0 and count % 10 == 0:
+                    import time
+                    time.sleep(0.5)
+
+            log.info(f"Enriched {count}/{len(entity_ids)} entities")
+            return count
+
+        finally:
+            conn.close()
