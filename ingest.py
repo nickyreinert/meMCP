@@ -90,6 +90,8 @@ def main():
                         help="Process only a specific entity by ID (use with --llm-only).")
     parser.add_argument("--batch-size", type=int, default=50,
                         help="Number of entities to process in LLM batch mode (default: 50).")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Limit number of items to process per source (0 = no limit, for testing).")
     
     # YAML update flags (manual editing workflow)
     parser.add_argument("--yaml-update", action="store_true",
@@ -245,6 +247,13 @@ def main():
             continue
 
         log.info(f"Running oeuvre source: {name}")
+        
+        # Apply limit override if specified
+        if args.limit > 0:
+            cfg = dict(cfg)  # Make a copy
+            cfg['limit'] = args.limit
+            log.info(f"  Limiting to {args.limit} items")
+        
         scraper = ScraperFactory.create(name, cfg, db_path=db_path)
         if not scraper:
             continue
