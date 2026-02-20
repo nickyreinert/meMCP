@@ -1,9 +1,10 @@
 identity:
   de:
-    name: Jane Doe
-    tagline: "Its me"
-    description: "I do stuff"
-    location: LA, USA
+    basic:
+      name: Jane Doe
+      tagline: "Its me"
+      description: "I do stuff"
+      location: LA, USA
     links:
       github: https://github.com/janedoe
       medium: https://janedoe.medium.com

@@ -181,3 +181,53 @@ i18n:
     - de                          # German — primary second language
     - en                          # English — primary second language
   batch_sleep_seconds: 0.4        # ~25 req/min → safe under GROQ free tier
+
+# ── Tag Metrics Configuration ──────────────────────────────────────────────
+# Customizable formulas and weights for calculating skill/technology/tag metrics
+# All weights are normalized internally, so total doesn't need to equal 1.0 or 100
+
+metrics:
+  enabled: true
+  version: "1.0"  # increment when changing formulas to trigger recalculation
+
+  # Proficiency: measures expertise level (0-100) based on recency and duration
+  proficiency:
+    recency_weight: 0.6
+    duration_weight: 0.4
+    recency_decay_halflife: 3.0
+    min_score: 5.0
+
+  # Experience years: total time spent (weighted by intensity)
+  experience_years:
+    deduplicate_overlaps: true
+    current_bonus_multiplier: 1.2
+
+  # Frequency: how often tag appears relative to all entities
+  frequency:
+    min_threshold: 3
+
+  # Diversity: variety of contexts (flavors, categories)
+  diversity:
+    flavor_weight: 0.5
+    category_weight: 0.5
+    saturation_threshold: 10
+
+  # Growth trend: usage pattern over time
+  growth:
+    min_timespan_years: 1.0
+    min_entity_count: 3
+    increasing_threshold: 0.5
+    decreasing_threshold: -0.3
+
+  # Relevance: composite score combining all metrics (0-100)
+  relevance:
+    weights:
+      proficiency: 0.30
+      frequency: 0.20
+      recency: 0.20
+      diversity: 0.15
+      experience: 0.10
+      growth: 0.05
+    current_bonus: 10
+    stale_penalty: 15
+    stale_threshold_years: 5
