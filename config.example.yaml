@@ -7,6 +7,8 @@ server:
   host: 0.0.0.0
   port: 8000
   admin_token: "change-me-please"   # or set ADMIN_TOKEN env var
+  base_url: http://localhost:8000
+
 
 # ── Storage ─────────────────────────────────────────────────
 db_path: db/profile.db
