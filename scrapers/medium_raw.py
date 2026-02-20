@@ -5,15 +5,22 @@ Parses a raw HTML dump of Medium profile page to extract all published articles.
 Extracts article links, titles, and publication dates from DOM structure.
 Fetches full article content from URLs using headless browser (bypasses Cloudflare).
 
-YAML Caching:
+YAML Sync Integration:
+- Incremental updates: Always checks HTML for new articles not yet in YAML cache
 - First run: Parses HTML → creates `<file>.yaml` cache
-- Subsequent runs: Loads from YAML cache (fast, skips HTML parsing)
-- Manual editing: Edit the YAML file to refine content
+- Subsequent runs: 
+  - Parses HTML to find ALL available articles
+  - Loads existing YAML cache (preserves manual edits + LLM enrichment)
+  - Merges: keeps existing articles, adds NEW articles from HTML
+  - Updates YAML if new articles found
+- Force mode (--force): Discards YAML cache, uses fresh HTML parse
+- Manual editing: Edit YAML to refine content (preserved during incremental updates)
 
 Depends on:
 - BeautifulSoup4 for HTML parsing
 - Playwright for headless browser (pip install playwright && playwright install)
 - base.BaseScraper for common functionality
+- yaml_sync module for bidirectional YAML ↔ DB synchronization
 """
 
 import logging
@@ -88,43 +95,58 @@ class MediumRawScraper(BaseScraper):
         yaml_cache_path = Path(str(html_path) + ".yaml")
         self.yaml_cache_path = yaml_cache_path  # Expose for ingest.py
         
-        # Determine if we need to reload
-        should_parse_html = force
+        # Parse HTML to find all available articles
+        log.info(f"Reading Medium HTML from {html_path}")
+        try:
+            content = html_path.read_text(encoding='utf-8')
+        except Exception as e:
+            log.error(f"Failed to read file {html_path}: {e}")
+            return []
         
-        if yaml_cache_path.exists() and not force:
+        html_articles = self._parse_html(content)
+        html_urls = {a.get("url") for a in html_articles if a.get("url")}
+        
+        # Load existing YAML cache (if exists)
+        existing_articles = []
+        existing_urls = set()
+        
+        if yaml_cache_path.exists():
             metadata, data = load_yaml_with_metadata(yaml_cache_path)
+            existing_articles = self._load_from_yaml(yaml_cache_path, metadata, data)
+            existing_urls = {a.get("url") for a in existing_articles if a.get("url")}
+            
+            # Check if YAML was manually edited
             last_synced = metadata.get('last_synced') if metadata else None
-            
             if needs_reload(yaml_cache_path, last_synced):
-                log.info(f"YAML cache was edited manually (file mtime > last_synced)")
-                log.info(f"Loading from YAML cache: {yaml_cache_path}")
-                return self._load_from_yaml(yaml_cache_path, metadata, data)
-            else:
-                # YAML not edited, load from cache
-                log.info(f"Loading from YAML cache: {yaml_cache_path}")
-                return self._load_from_yaml(yaml_cache_path, metadata, data)
-        else:
-            should_parse_html = True
+                log.info(f"YAML cache was edited manually (mtime > last_synced)")
         
-        if should_parse_html:
-            # Parse HTML (first run or forced refresh)
-            log.info(f"Reading Medium HTML from {html_path}")
-            try:
-                content = html_path.read_text(encoding='utf-8')
-            except Exception as e:
-                log.error(f"Failed to read file {html_path}: {e}")
-                return []
-            
-            articles = self._parse_html(content)
-            
-            if articles:
-                # Create/update YAML cache
-                log.info(f"Saving to YAML cache: {yaml_cache_path}")
-                self._save_to_yaml(articles, yaml_cache_path)
-                log.info(f"✓ YAML cache saved (single source of truth)")
-                log.info(f"  → Edit this file manually to refine data")
-            
-            return articles
+        # Merge strategy:
+        # 1. Keep all existing YAML articles (including manual edits and LLM enrichment)
+        # 2. Add new articles found in HTML that aren't in YAML yet
+        new_articles = [a for a in html_articles if a.get("url") not in existing_urls]
+        
+        if new_articles:
+            log.info(f"Found {len(new_articles)} new articles in HTML (not in YAML cache)")
+            merged_articles = existing_articles + new_articles
+        else:
+            log.info(f"No new articles found in HTML")
+            merged_articles = existing_articles
+        
+        # Handle force flag: if forced, replace with fresh HTML parse
+        if force:
+            log.info(f"Force mode: using fresh HTML parse (discarding YAML cache)")
+            merged_articles = html_articles
+        
+        # Save updated YAML cache
+        if merged_articles:
+            if new_articles or force:
+                log.info(f"Updating YAML cache: {yaml_cache_path}")
+                self._save_to_yaml(merged_articles, yaml_cache_path)
+                log.info(f"✓ YAML cache updated ({len(merged_articles)} total articles)")
+            else:
+                log.info(f"✓ Using YAML cache ({len(merged_articles)} articles)")
+        
+        return merged_articles
     
     def _load_from_yaml(
         self,
