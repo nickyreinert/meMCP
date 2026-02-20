@@ -69,8 +69,9 @@ class GithubScraper(BaseScraper):
                 
             repo_url = repo.get("html_url")
             
-            # Check if already processed
-            if not self.should_fetch(repo_url, force):
+            # Skip already processed repos only if not forcing and skip_cached is enabled
+            skip_cached = self.config.get("skip_cached", False)
+            if skip_cached and not force and not self.should_fetch(repo_url, force):
                 log.debug(f"Skipping already cached: {repo.get('name')}")
                 continue
 
