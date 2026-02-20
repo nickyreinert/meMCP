@@ -1,5 +1,43 @@
 # UNFINISHED TASKS
 
+## 2026-02-20 23:15 - Identity Data Refactoring
+
+**Status**: Complete
+
+**What's Done**:
+- ✅ Created identity scraper (scrapers/identity.py) to load from identity.yaml
+- ✅ Added raw_data TEXT column to entities table for JSON storage
+- ✅ Updated db/models.py to handle raw_data serialization/deserialization
+- ✅ Created migration script (scripts/migrate_add_raw_data.py)
+- ✅ Removed personal flavor entity creation from seeder
+- ✅ Updated /greeting endpoint to use identity flavor with categories
+- ✅ Integrated identity scraper into ingest.py
+- ✅ Cleaned up 17 duplicate personal flavor entries
+- ✅ Tested multi-language support (en/de) with identity data
+
+**Architecture Changes**:
+- Identity data now stored as 3 separate entities with flavor="identity"
+  - basic: name, tagline, description, location
+  - links: github, medium, blog, linkedin, etc.
+  - contact: reason, preferred, email, phone, telegram, other
+- Each entity stores multi-lang data as JSON in raw_data field
+- Frontend /greeting endpoint extracts requested language from raw_data
+- No more duplicate personal flavor entities
+
+**Files Modified**:
+- `scrapers/identity.py` (new)
+- `scrapers/base.py` (added identity connector)
+- `db/models.py` (added raw_data column, updated upsert_entity and _hydrate)
+- `scrapers/seeder.py` (removed _seed_owner, added raw_data passthrough)
+- `app/main.py` (updated /greeting endpoint for identity flavor)
+- `ingest.py` (added identity source processing)
+- `scripts/migrate_add_raw_data.py` (new migration script)
+
+**Next Steps**:
+- ✅ Run: `python ingest.py --source identity --disable-llm` to populate identity entities
+- ✅ Database migration executed successfully
+- ✅ Multi-language support verified (en/de)
+
 ## 2026-02-20 - Sitemap Scraper YAML Sync Update
 
 **Status**: Implementation complete, testing pending

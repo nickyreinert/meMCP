@@ -347,49 +347,55 @@ async def greeting(
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
 ):
     """
-    Returns the profile owner's identity card.
-    Tagline and greeting text are served in the requested language
-    if a translation exists (run POST /admin/translate first).
+    Returns the profile owner's identity card from identity entities.
+    Supports multi-language via raw_data JSON field.
+    Falls back to English if requested language not available.
     """
     resolved = resolve_lang(lang, accept_language)
 
-    person_rows = list_entities(conn, flavor="personal", limit=1)
-    if not person_rows:
-        raise HTTPException(404, "Person entity not found — run the seeder first.")
-    person = person_rows[0]
-
-    raw_data = person.get("raw_data") or {}
-    if isinstance(raw_data, str):
-        try:
-            raw_data = json.loads(raw_data)
-        except Exception:
-            raw_data = {}
-
-    # Base values (English / seeded)
-    tagline       = person.get("description", "")
-    greeting_text = raw_data.get("greeting") or tagline
-
-    # Overlay translation if available
-    if resolved != DEFAULT_LANG:
-        tr = get_greeting_translation(conn, resolved)
-        if tr:
-            tagline       = tr.get("tagline") or tagline
-            greeting_text = tr.get("greeting") or greeting_text
-
+    # Fetch all identity entities (basic, links, contact)
+    identity_rows = list_entities(conn, flavor="identity", limit=10)
+    if not identity_rows:
+        raise HTTPException(404, "Identity entities not found — run ingest.py --source identity first.")
+    
+    # Organize by category
+    identity_data = {}
+    for row in identity_rows:
+        category = row.get("category")
+        if category:
+            identity_data[category] = row
+    
+    # Get basic info
+    basic_entity = identity_data.get("basic", {})
+    basic_raw = basic_entity.get("raw_data", {})
+    basic_lang = basic_raw.get(resolved, basic_raw.get(DEFAULT_LANG, {}))
+    
+    # Get links info
+    links_entity = identity_data.get("links", {})
+    links_raw = links_entity.get("raw_data", {})
+    links_lang = links_raw.get(resolved, links_raw.get(DEFAULT_LANG, {}))
+    
+    # Get contact info  
+    contact_entity = identity_data.get("contact", {})
+    contact_raw = contact_entity.get("raw_data", {})
+    contact_lang = contact_raw.get(resolved, contact_raw.get(DEFAULT_LANG, {}))
+    
     return ok(
         {
-            "name":     person["title"],
-            "tagline":  tagline,
-            "greeting": greeting_text,
-            "location": raw_data.get("location"),
-            "links": {
-                "website":  person.get("url"),
-                "github":   raw_data.get("github"),
-                "medium":   raw_data.get("medium"),
-                "linkedin": raw_data.get("linkedin"),
-                "email":    raw_data.get("email"),
+            "name":        basic_lang.get("name", basic_entity.get("title", "")),
+            "tagline":     basic_lang.get("tagline", ""),
+            "description": basic_lang.get("description", ""),
+            "location":    basic_lang.get("location", ""),
+            "links":       links_lang,
+            "contact": {
+                "reason":    contact_lang.get("reason", ""),
+                "preferred": contact_lang.get("preferred", ""),
+                "email":     contact_lang.get("email", ""),
+                "phone":     contact_lang.get("phone", ""),
+                "telegram":  contact_lang.get("telegram", ""),
+                "other":     contact_lang.get("other", ""),
             },
-            "tags": person.get("tags", []),
+            "tags": basic_entity.get("tags", []),
         },
         meta=_lang_meta(resolved),
     )

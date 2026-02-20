@@ -141,6 +141,29 @@ def main():
     all_items = []
     scrapers_with_yaml = []  # Track (scraper, items) for YAML sync
 
+    # ── IDENTITY INGESTION ──────────────────────────────────────────
+    identity_cfg = config.get("identity", {})
+    if identity_cfg and not args.llm_only:
+        if args.source and args.source != "identity":
+            # Skip if source filter doesn't match
+            pass
+        else:
+            log.info("Running identity source")
+            # Create identity config for ScraperFactory
+            identity_scraper_cfg = {
+                "enabled": True,
+                "connector": "identity",
+                "source": identity_cfg.get("source", "data/identity.yaml")
+            }
+            scraper = ScraperFactory.create("identity", identity_scraper_cfg, db_path=db_path, llm=enricher)
+            if scraper:
+                try:
+                    items = scraper.run(force=args.force)
+                    log.info(f"  Fetched {len(items)} items from identity")
+                    all_items.extend(items)
+                except Exception as e:
+                    log.error(f"  Failed identity source: {e}")
+
     # ── STAGES INGESTION (now uses connector architecture) ──────────
     stages_cfg = config.get("stages", {})
     if stages_cfg and not args.llm_only:

@@ -102,10 +102,11 @@ class Seeder:
         entity_id_map = {}  # Return mapping of keys to entity_ids
         
         try:
-            # 1. Seed the owner (personal entity)
-            self._seed_owner(conn, owner_cfg)
+            # NOTE: Owner/personal entity removed - now handled by identity scraper
+            # Identity data is loaded from identity.yaml via identity scraper
+            # Run: python ingest.py --source identity
 
-            # 2. Process all entities
+            # Process all entities
             for item in raw_items:
                 entity_id = self._seed_entity(conn, item, enrich_llm=enrich_llm)
                 if entity_id:
@@ -146,21 +147,21 @@ class Seeder:
         finally:
             conn.close()
 
-    # --- OWNER ---
-
-    def _seed_owner(self, conn: sqlite3.Connection, cfg: dict):
-        """Seed the 'personal' entity (profile owner)."""
-        eid = upsert_entity(conn, {
-            "flavor":      "personal",
-            "title":       cfg.get("name", ""),
-            "description": cfg.get("tagline", ""),
-            "url":         cfg.get("blog_url"),
-            "source":      "manual",
-            "tags":        cfg.get("tags", []),
-        })
-        log.info(f"Owner entity: {cfg.get('name')} ({eid})")
-        self._seen_titles.add(cfg.get("name", "").lower())
-        return eid
+    # --- DEPRECATED: Owner seeding removed ---
+    # Identity data is now loaded via identity scraper from identity.yaml
+    # def _seed_owner(self, conn: sqlite3.Connection, cfg: dict):
+    #     """Seed the 'personal' entity (profile owner)."""
+    #     eid = upsert_entity(conn, {
+    #         "flavor":      "personal",
+    #         "title":       cfg.get("name", ""),
+    #         "description": cfg.get("tagline", ""),
+    #         "url":         cfg.get("blog_url"),
+    #         "source":      "manual",
+    #         "tags":        cfg.get("tags", []),
+    #     })
+    #     log.info(f"Owner entity: {cfg.get('name')} ({eid})")
+    #     self._seen_titles.add(cfg.get("name", "").lower())
+    #     return eid
 
     # --- GENERIC ENTITY SEEDER ---
 
@@ -237,6 +238,7 @@ class Seeder:
             "is_current":      item.get("is_current", 0),
             "language":        item.get("language", "en"),
             "visibility":      item.get("visibility", "public"),
+            "raw_data":        item.get("raw_data"),  # Pass through raw_data for identity entities
             "technologies":    technologies,
             "skills":          skills,
             "tags":            tags,

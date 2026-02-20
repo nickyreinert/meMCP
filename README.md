@@ -40,7 +40,7 @@ Includes a flexible scraper framework with optional built-in LLM-powered content
 
 The MCP stores information as **entities**. There are **three** main types of entities (called `flavors`):
 
-- `personal` - Static information about you (name, bio, greetings, contact details, etc.)
+- `identity` - Static information about you (name, bio, greetings, contact details, etc.)
 - `stages` - Career stages (education, jobs, projects, etc.) with timeframes and descriptions
 - `oeuvre` - Your work (code repos, articles, books, talks, etc.) with metadata and links
 

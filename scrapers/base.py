@@ -131,6 +131,9 @@ class ScraperFactory:
         elif connector == "linkedin_pdf":
             from .linkedin_pdf_scraper import LinkedInPDFScraper
             return LinkedInPDFScraper(name, config, db_path, llm=llm)
+        elif connector == "identity":
+            from .identity import IdentityScraper
+            return IdentityScraper(name, config, db_path, llm=llm)
         else:
             log.warning(f"Unknown connector '{connector}' for source '{name}'")
             return None
