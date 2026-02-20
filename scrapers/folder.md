@@ -25,9 +25,15 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 ## Scrapers Overview
 
 ### GitHub (`github_api`)
-- Uses GitHub REST API
-- Simple, fast, no browser automation needed
-- Fetches repos with optional README content
+- Uses GitHub REST API v3
+- **Full pagination support**: Fetches ALL repos (100 per page, follows Link headers)
+- Features:
+  - Optional README content fetching
+  - Fork filtering (configurable)
+  - Language detection
+  - Stars and forks metadata
+- Fast, no browser automation needed
+- Respects rate limits via headers
 
 ### RSS (`rss`)
 - Standard RSS/Atom feed parsing

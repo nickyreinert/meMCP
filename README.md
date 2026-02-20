@@ -2,6 +2,8 @@
 
 A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves your professional profile, projects, publications, and career data.
 
+Includes a flexible scraper framework with optional built-in LLM-powered content extraction and enrichment, supporting multiple data sources like GitHub, Medium, LinkedIn, RSS feeds, and more.
+
 ## Features
 
 - Multi-language support (EN, DE)
@@ -9,10 +11,34 @@ A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves y
 - LLM-powered content extraction and enrichment (e.g., summarization, tag extraction, skill/technology classification)
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
+- calculate different metrics for `skills`, `technologies` and `tags`:
+  - `proficiency` (based on recency and duration of experience)
+  - `experience_years` (total years of experience)
+  - `project_count` (number of projects associated with the skill/technology/tag)
+  - `frequency` (how often the skill/technology/tag appears across all entities)
+  - `last_used` (date of the most recent entity associated with the skill/technology/tag)
+  - `diversity` (variety of contexts in which the skill/technology/tag is used, e.g., different categories or flavors)
+  - `growth` (trend of usage over time, e.g., increasing, stable, decreasing)
+  - `distribution` (indicates distribution of a tag, skill, or technology across different entities flavors, stage categories (job, education, ...) or oeuvre categories (coding, article, book, ...))
+  - `relevance` (a composite score based on the above metrics to indicate overall relevance of a skill/technology/tag in the profile)
+
+## Available Connectors
+
+| Connector | Purpose | Config Example |
+|-----------|---------|----------------|
+| `github_api` | GitHub repos via API | `url: https://api.github.com/users/USERNAME/repos` |
+| `rss` | RSS/Atom feeds | `url: https://example.com/feed.xml` |
+| `medium_raw` | Raw HTML dump of Medium profile (bypasses Cloudflare) | `url: file://data/Medium.html` |
+| `linkedin_pdf` | LinkedIn profile PDF export with smart YAML caching | `url: file:///data/linkedin_profile.pdf` |
+| `sitemap` | Scrape multiple URLs from sitemap.xml | `url: https://example.com/sitemap.xml`<br/>`cache-file: file://data/cache.yaml` |
+| `html` | Scrape single HTML page | `url: https://example.com`<br/>`cache-file: file://data/cache.yaml` |
+| `manual` | Manual YAML data entry | `url: file://path/to/data.yaml` |
+
+**Note on Medium:** The `medium_raw` connector extracts **all articles** from a saved HTML copy of your Medium profile page, while `rss` only gets the ~10 most recent posts from the RSS feed.
 
 ## Data Model
 
-The MCP stores information as **entities**. There are **three** main types (`flavor` of entities):
+The MCP stores information as **entities**. There are **three** main types of entities (called `flavors`):
 
 - `personal` - Static information about you (name, bio, greetings, contact details, etc.)
 - `stages` - Career stages (education, jobs, projects, etc.) with timeframes and descriptions
@@ -111,18 +137,75 @@ Server will be available at: **http://localhost:8000**
 
 ## Configuration
 
+### Basic Settings
+
+Key settings in `config.yaml`:
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 8000
+  admin_token: "change-me-please"
+
+llm:
+  backend: ollama  # or groq
+  model: mistral-small:24b-instruct-2501-q4_K_M
+
+oeuvre_sources:
+  github:
+    enabled: true
+    connector: github_api
+    url: https://api.github.com/users/YOUR_USERNAME/repos
+
+  medium:
+    enabled: true
+    connector: medium_raw  # or rss
+    url: file://data/Medium.html  # for medium_raw, or https://medium.com/feed/@username for rss
+```
+
 ### Scraper Modules
 
-#### LinkedIn
+#### LinkedIn Profile (PDF Export)
 
-LinkedIn does not allow to parse your profile. You need to export your profile page as PDF. The scraper usess LLM to extract structured data from the PDF. 
-It creates an YAML file in `data/linkedin_profile.pdf.yaml` that can be used for manual editing. If this file exists, the scraper will not run PDF extraction again.
+LinkedIn does not allow API access to your profile data. Export your profile as PDF and use the `linkedin_pdf` connector to extract structured data with LLM.
+
+**YAML Cache Workflow:**
+- **First run**: Parses PDF with LLM → creates `<pdf_file>.yaml` cache
+- **Subsequent runs**: Loads from YAML cache (unless PDF modified or `--force`)
+- **Re-parse triggers**:
+  - PDF modification date newer than YAML `last_synced`
+  - `--force` flag provided
+- **LLM enrichment**: Automatically checks each entity
+  - If missing tags/skills/technologies → re-enriches with LLM
+  - If already enriched → uses cached data
+- **Manual editing**: Edit YAML to refine content (preserved across runs)
 
 ```yaml
 stages:
-  enabled: true                      # Set false to skip stages processing
-  source_type: linkedin_pdf          # Only linkedin_pdf supported (auto-caching to YAML)
-  source_path: linkedin_profile.pdf  # LinkedIn export PDF file
+  connector: linkedin_pdf
+  enabled: true
+  url: file:///data/linkedin_profile.pdf  # LinkedIn export PDF file
+  llm-processing: true
+```
+
+**How to get LinkedIn PDF:**
+1. Go to your LinkedIn profile
+2. Click "More" → "Save to PDF"
+3. Save as `data/linkedin_profile.pdf`
+
+**First run:**
+```bash
+python ingest.py --source stages
+```
+Creates `data/linkedin_profile.pdf.yaml` with experience, education, certifications.
+
+**Edit and update:**
+1. Edit `data/linkedin_profile.pdf.yaml` manually
+2. Re-run: `python ingest.py --source stages` (loads from YAML, enriches missing fields)
+
+**Force re-parse:**
+```bash
+python ingest.py --source stages --force
 ```
 
 #### Medium.com
@@ -169,7 +252,14 @@ The YAML cache will be used for future runs to avoid re-parsing the HTML file an
 
 ### GitHub
 
-Github offers an API to parse your repositories. The parser will extract metadata, like use languages, description and README content, which can be enriched with LLM to create a more detailed description of the project and extract `technologies`, `skills` and `tags`.
+Fetches repositories from GitHub API with full pagination support.
+
+Features:
+- Automatic pagination (fetches ALL repos, not just first page)
+- README fetching for richer descriptions (optional)
+- Fork filtering (skips forks by default)
+- Language and metadata extraction
+- Stars and forks tracking
 
 ```yaml
   github: # can be named anything, but the `connector` must be `github_api`
@@ -177,8 +267,9 @@ Github offers an API to parse your repositories. The parser will extract metadat
     enabled: true
     url: https://api.github.com/users/nickyreinert/repos
     sub_type_override: coding   # Override default sub_type (coding/blog_post/article/book/website/podcast/video)
-    limit: 0                    # 0 = all, otherwise integer limit on number of repos to fetch
+    limit: 0                    # 0 = all repos, otherwise integer limit (applied across all pages)
     fetch_readmes: true         # true = richer descriptions, slower
+    include_forks: false        # false = skip forked repos (default)
     llm-processing: true        
 ```
 
@@ -197,9 +288,9 @@ You can also add any RSS/Atom feed as source. The parser will extract metadata a
     llm-processing: true
 ```
 
-### Website and Sitemap Scraper
+### Sitemap Scraper (Multi-Entity)
 
-You can add any website with a sitemap.xml as a source. A sitemap usually indicates multiple pages. By default each page is considered a single *entity*, which means it will be fetched, summarized and classified. If you want the entire site to be considered as a whole, you can set `single-entity: true`. 
+Parse sitemap.xml and scrape multiple pages. Each page becomes a separate entity.
 
 **Cache File Workflow:**
 - If `cache-file` is specified and exists: loads from cache, skips fetching
@@ -207,17 +298,14 @@ You can add any website with a sitemap.xml as a source. A sitemap usually indica
 - If cache missing: fetches pages and saves to cache file
 - Cache file allows manual editing of extracted data without losing changes on subsequent runs
 
-**Mode 1: Multi-entity** (each page = separate entity)
 ```yaml
   my_blog:
     connector: sitemap
     enabled: true
     url: https://myblog.com/sitemap.xml
-    sub_type_override: blog_post
     limit: 0                    # 0 = all, otherwise integer limit
     cache_ttl_hours: 168        # 7 days
     llm-processing: true
-    single-entity: false        # Each page becomes a separate entity (default)
     cache-file: file://data/myblog_sitemap.yaml  # Optional: cache for manual editing
     
     connector-setup:
@@ -227,22 +315,27 @@ You can add any website with a sitemap.xml as a source. A sitemap usually indica
       post-description-selector: 'meta[name="description"]'
 ```
 
-**Mode 2: Single-entity** (whole site = one entity)
+### HTML Scraper (Single-Entity)
+
+Scrape a single HTML page (e.g., landing page, project website, portfolio).
+
+**Cache File Workflow:**
+- Same as sitemap connector, but creates single entity
+- Ideal for project websites, portfolios, landing pages
+
 ```yaml
   my_project_website:
-    connector: sitemap
+    connector: html
     enabled: true
-    url: https://myproject.com/sitemap.xml
+    url: https://myproject.com
     sub_type_override: website
     llm-processing: true
-    single-entity: true         # Treat entire site as one entity
-    cache-file: file://data/myproject_sitemap.yaml  # Optional: cache for manual editing
+    cache-file: file://data/myproject.yaml  # Optional: cache for manual editing
     
     connector-setup:
       post-title-selector: h1
       post-content-selector: main
       post-description-selector: 'meta[name="description"]'
-``` 
 ```
 
 ### Static Manual Data
@@ -287,9 +380,10 @@ entities:
     
 ```
 
-## LLM Backend Setup
+## Backend
 
-**Option 1: Groq (Recommended - Fast & Free Tier)**
+### LLM Selection
+**Option 1: Groq**
 
 ```bash
 pip install groq
@@ -297,7 +391,7 @@ export GROQ_API_KEY=gsk_...
 # Update config.yaml: llm.backend = groq
 ```
 
-**Option 2: Ollama (Local & Private)**
+**Option 2: Ollama**
 
 ```bash
 brew install ollama
@@ -306,7 +400,7 @@ ollama pull mistral-small:24b-instruct-2501-q4_K_M
 # Update config.yaml: llm.backend = ollama
 ```
 
-### Development
+### Running the Server
 
 ```bash
 # Run with auto-reload
@@ -330,55 +424,29 @@ open http://localhost:8000/docs
 - `GET /work` - Projects & publications
 - `GET /search?q=...` - Full-text search
 - `GET /languages` - Translation coverage
-- `POST /admin/rebuild` - Rebuild data (auth required)
-- `POST /admin/translate` - Run translations (auth required)
 
 Full API docs: http://localhost:8000/docs
-
-## Configuration
-
-Key settings in `config.yaml`:
-
-```yaml
-server:
-  host: 0.0.0.0
-  port: 8000
-  admin_token: "change-me-please"
-
-llm:
-  backend: ollama  # or groq
-  model: mistral-small:24b-instruct-2501-q4_K_M
-
-oeuvre_sources:
-  github:
-    enabled: true
-    connector: github_api
-    url: https://api.github.com/users/YOUR_USERNAME/repos
-
-  medium:
-    enabled: true
-    connector: medium_raw  # or rss
-    url: file://data/Medium.html  # for medium_raw, or https://medium.com/feed/@username for rss
-```
-
-## Available Connectors
-
-| Connector | Purpose | Config Example |
-|-----------|---------|----------------|
-| `github_api` | GitHub repos via API | `url: https://api.github.com/users/USERNAME/repos` |
-| `rss` | RSS/Atom feeds | `url: https://example.com/feed.xml` |
-| `medium_raw` | Raw HTML dump of Medium profile (bypasses Cloudflare) | `url: file://data/Medium.html` |
-| `sitemap` | Scrape URLs from sitemap.xml (multi-entity or single-entity mode) | `url: https://example.com/sitemap.xml`<br/>`single-entity: false` |
-| `manual` | Manual JSON data entry | `url: file://path/to/data.json` |
-
-**Note on Medium:** The `medium_raw` connector extracts **all articles** from a saved HTML copy of your Medium profile page, while `rss` only gets the ~10 most recent posts from the RSS feed.
 
 ## Data Storage
 
 - `db/profile.db` - SQLite database with all entities
 - `.cache/` - Cached API responses and scraped content
-- `data/linkedin_profile.pdf.yaml` - Auto-generated YAML cache for manual LinkedIn profile editing
+- `data/linkedin_profile.pdf.yaml` - Auto-generated YAML cache for LinkedIn profile (with LLM enrichment)
+- `data/Medium.html.yaml` - Auto-generated YAML cache for Medium articles (with LLM enrichment)
+- `data/*_sitemap.yaml` - Optional YAML caches for sitemap sources (if `cache-file` configured)
 - `data/<source>_export.yaml` - Exported entities by source for manual editing
+
+**YAML Cache Benefits:**
+- Manual editing without re-scraping
+- Preserves LLM enrichment data (tags, skills, technologies)
+- Tracks sync state with `last_synced` metadata
+- Atomic writes prevent corruption
+- Automatic detection of source file changes (PDF, HTML modification times)
+
+## Planned Features
+
+- [ ] Add more connectors (e.g., Twitter, YouTube, personal website)
+- [ ] Allow incoming and outgoing connectings to other meMCP instances to build a network graph of professionals
 
 ## License
 
