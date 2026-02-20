@@ -129,7 +129,12 @@ stages:
 
 Medium does not allow scraping your complete story list. To consider all your Medium articles, scroll to the end of your list of stories (https://medium.com/me/stories?tab=posts-published) and then open the DOM inspector. Copy the top node (<html>) and past it in a file (e.g., `data/Medium.html`). Then use the `medium_raw` connector to extract all articles from this file.
 
-This will create a processed file `data/Medium.html.yaml` that can be used for manual editing and will be used for future runs to avoid re-parsing the HTML file, as long as this file exists.
+**Important**: The `medium_raw` connector extracts article URLs and metadata from the saved HTML profile page, but **Medium blocks automated content fetching** (403 Forbidden). This means:
+- ✓ You get: Article titles, URLs, and publication dates
+- ✗ You don't get: Full article content for LLM processing
+- **Recommended alternative**: Use the `rss` connector (see below) which includes article summaries/content for the ~10 most recent posts
+
+The scraper creates a YAML cache at `data/Medium.html.yaml` for manual editing, which will be used for future runs to avoid re-parsing the HTML file.
 
 ```yaml
   medium_raw: # can be named anything, but the `connector` must be `medium_raw`
@@ -140,20 +145,23 @@ This will create a processed file `data/Medium.html.yaml` that can be used for m
     limit: 0  # 0 = all available
     cache_ttl_hours: 168  # 7 days
     llm-processing: true
+    fetch_content: false  # Medium blocks automated access (403 Forbidden)
 ```
 
-For incremental updates, you can switch to the `rss` connector, but it will only consider the ~10 most recent articles from the RSS feed.
+For incremental updates **with full article content**, you can switch to the `rss` connector. The RSS feed includes article summaries/content and will work for LLM processing, but it will only consider the ~10 most recent articles from the RSS feed.
 
 ```yaml
-  medium_rss: # can be named anything, but the `connector` must be `medium_rss`
-    connector: medium_rss
+  medium_rss: # can be named anything, but the `connector` must be `rss`
+    connector: rss
     enabled: true
     url: https://medium.com/feed/@nickyreinert
     sub_type_override: article
-    limit: 0  # 0 = all available
+    limit: 0  # 0 = all available (RSS typically has ~10 most recent)
     cache_ttl_hours: 168  # 7 days
     llm-processing: true
 ```
+
+**Best practice**: Use `medium_raw` once to get your complete article history (metadata only), then switch to `rss` for ongoing updates with content.
 
 ### GitHub
 
