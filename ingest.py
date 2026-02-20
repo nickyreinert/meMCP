@@ -309,6 +309,10 @@ def main():
             
             # Export Medium/oeuvre entities by source
             for source_name, source_cfg in config.get("oeuvre_sources", {}).items():
+                # Skip sources not matching --source filter
+                if args.source and source_name != args.source:
+                    continue
+                
                 if not source_cfg.get("enabled", True):
                     continue
                 
