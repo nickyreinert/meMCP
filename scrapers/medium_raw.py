@@ -25,6 +25,11 @@ from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup
 from .base import BaseScraper
+from .yaml_sync import (
+    load_yaml_with_metadata,
+    save_yaml_atomic,
+    needs_reload
+)
 
 log = logging.getLogger("mcp.scrapers.medium_raw")
 
