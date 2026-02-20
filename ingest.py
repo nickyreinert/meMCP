@@ -278,9 +278,9 @@ def main():
         enrich_llm = not args.disable_llm
         entity_id_map = seeder.seed_all(all_items, owner_cfg, enrich_llm=enrich_llm)
         
-        # Update YAML caches with entity_ids
+        # Update YAML caches with entity_ids and LLM enrichment (if applicable)
         for scraper, items in scrapers_with_yaml:
-            from scrapers.yaml_sync import update_yaml_after_db_insert
+            from scrapers.yaml_sync import update_yaml_after_db_insert, update_yaml_after_llm
             yaml_path = scraper.yaml_cache_path
             log.info(f"Updating YAML cache: {yaml_path}")
             
@@ -292,10 +292,52 @@ def main():
                 if url and key and key in entity_id_map:
                     url_to_entity_id[url] = entity_id_map[key]
             
+            # Update entity_ids first
             if url_to_entity_id:
                 success = update_yaml_after_db_insert(yaml_path, url_to_entity_id)
                 if success:
                     log.info(f"  ✓ Updated {len(url_to_entity_id)} entity_ids in {yaml_path}")
+            
+            # Update LLM enrichment fields if LLM was enabled
+            if enrich_llm and url_to_entity_id:
+                from db.models import get_db
+                conn = get_db(db_path)
+                entity_id_to_enrichment = {}
+                
+                for url, entity_id in url_to_entity_id.items():
+                    # Get entity enrichment data
+                    row = conn.execute(
+                        """SELECT description, llm_enriched, llm_model, llm_enriched_at 
+                           FROM entities WHERE id=?""",
+                        (entity_id,)
+                    ).fetchone()
+                    
+                    if row and row['llm_enriched']:
+                        # Get tags
+                        tags_rows = conn.execute(
+                            """SELECT tag, tag_type FROM tags WHERE entity_id=?""",
+                            (entity_id,)
+                        ).fetchall()
+                        
+                        technologies = [r['tag'] for r in tags_rows if r['tag_type'] == 'technology']
+                        skills = [r['tag'] for r in tags_rows if r['tag_type'] == 'skill']
+                        generic_tags = [r['tag'] for r in tags_rows if r['tag_type'] == 'generic']
+                        
+                        entity_id_to_enrichment[entity_id] = {
+                            'description': row['description'],
+                            'technologies': technologies,
+                            'skills': skills,
+                            'tags': generic_tags,
+                            'llm_model': row['llm_model'],
+                            'llm_enriched_at': row['llm_enriched_at']
+                        }
+                
+                conn.close()
+                
+                if entity_id_to_enrichment:
+                    success = update_yaml_after_llm(yaml_path, entity_id_to_enrichment)
+                    if success:
+                        log.info(f"  ✓ Updated {len(entity_id_to_enrichment)} LLM enrichments in {yaml_path}")
 
         if args.disable_llm:
             log.info("Raw entities seeded. Run with --llm-only to enrich.")
