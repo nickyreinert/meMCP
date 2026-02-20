@@ -124,15 +124,18 @@ class Seeder:
             
             # 3. Update YAML cache with entity_ids
             if yaml_path and entity_mappings:
-                log.info(f"Updating YAML cache with {len(entity_mappings)} entity_ids")
+                # Build url -> entity_id mapping
+                url_to_entity_id = {}
                 for entity, entity_id in entity_mappings:
-                    update_yaml_after_db_insert(
-                        yaml_path=yaml_path,
-                        entity_id=entity_id,
-                        title=entity.get("title"),
-                        url=entity.get("url")
-                    )
-                log.info(f"✓ YAML cache updated with entity_ids")
+                    url = entity.get("url")
+                    if url:
+                        url_to_entity_id[url] = entity_id
+                
+                if url_to_entity_id:
+                    log.info(f"Updating YAML cache with {len(url_to_entity_id)} entity_ids")
+                    success = update_yaml_after_db_insert(yaml_path, url_to_entity_id)
+                    if success:
+                        log.info(f"✓ YAML cache updated with entity_ids")
             
             return entity_id_map
                 
@@ -352,16 +355,17 @@ class Seeder:
             
             # Update YAML cache with enriched fields
             if yaml_path:
-                update_yaml_after_llm(
-                    yaml_path=yaml_path,
-                    entity_id=entity_id,
-                    description=enrichment.get("description"),
-                    technologies=enrichment.get("technologies", []),
-                    skills=enrichment.get("skills", []),
-                    tags=enrichment.get("tags", []),
-                    llm_model=self.llm.model,
-                    llm_enriched_at=llm_enriched_at
-                )
+                entity_id_to_enrichment = {
+                    entity_id: {
+                        'description': enrichment.get("description"),
+                        'technologies': enrichment.get("technologies", []),
+                        'skills': enrichment.get("skills", []),
+                        'tags': enrichment.get("tags", []),
+                        'llm_model': self.llm.model,
+                        'llm_enriched_at': llm_enriched_at
+                    }
+                }
+                update_yaml_after_llm(yaml_path, entity_id_to_enrichment)
             
             return True
 

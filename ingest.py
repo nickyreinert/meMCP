@@ -284,21 +284,18 @@ def main():
             yaml_path = scraper.yaml_cache_path
             log.info(f"Updating YAML cache: {yaml_path}")
             
-            updated = 0
+            # Build url -> entity_id mapping for this scraper's items
+            url_to_entity_id = {}
             for item in items:
-                key = item.get("url") or item.get("title")
-                if key and key in entity_id_map:
-                    entity_id = entity_id_map[key]
-                    update_yaml_after_db_insert(
-                        yaml_path=yaml_path,
-                        entity_id=entity_id,
-                        title=item.get("title"),
-                        url=item.get("url")
-                    )
-                    updated += 1
+                url = item.get("url")
+                key = url or item.get("title")
+                if url and key and key in entity_id_map:
+                    url_to_entity_id[url] = entity_id_map[key]
             
-            if updated > 0:
-                log.info(f"  ✓ Updated {updated} entity_ids in {yaml_path}")
+            if url_to_entity_id:
+                success = update_yaml_after_db_insert(yaml_path, url_to_entity_id)
+                if success:
+                    log.info(f"  ✓ Updated {len(url_to_entity_id)} entity_ids in {yaml_path}")
 
         if args.disable_llm:
             log.info("Raw entities seeded. Run with --llm-only to enrich.")
