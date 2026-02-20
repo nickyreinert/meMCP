@@ -59,6 +59,22 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 - Basic HTTP requests only
 - For sites with simple HTML structure
 
+### LinkedIn PDF (`linkedin_pdf`)
+- Parses LinkedIn profile PDF export with LLM
+- Smart YAML caching with sync detection
+- Two modes:
+  - **First run**: Parses PDF → creates `.yaml` cache
+  - **Subsequent runs**: Loads from YAML cache (unless PDF modified or --force)
+- Re-parse triggers:
+  - PDF modification date newer than YAML last_synced
+  - `--force` flag provided
+- LLM enrichment detection:
+  - Checks each entity for `llm_enriched`, `tags`, `skills`, `technologies`
+  - If missing → flags for re-enrichment
+  - If present → uses cached data
+- Manual editing: Edit YAML to refine content (preserved across runs)
+- Requires: `pypdf` for PDF text extraction, LLM for structured data extraction
+
 **Note**: All scrapers use standard HTTP requests. If a site requires JavaScript rendering, users should save the fully-rendered HTML manually (like Medium approach) rather than adding browser automation dependencies.
 
 ## Features

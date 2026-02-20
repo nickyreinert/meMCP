@@ -191,12 +191,13 @@ class Seeder:
                      self.config.get("stages", {})
         llm_enabled = source_cfg.get("llm-processing", True) if source_cfg else True
 
-        # LLM enrichment
-        llm_enriched = False
-        llm_model = None
-        llm_enriched_at = None
+        # LLM enrichment (skip if already enriched in source data, e.g., from YAML)
+        llm_enriched = item.get("llm_enriched", 0)  # Check if already enriched
+        llm_model = item.get("llm_model")
+        llm_enriched_at = item.get("llm_enriched_at")
         
-        if enrich_llm and llm_enabled and self.llm and flavor in ("stages", "oeuvre"):
+        if not llm_enriched and enrich_llm and llm_enabled and self.llm and flavor in ("stages", "oeuvre"):
+            # Only enrich if not already enriched
             raw_text = item.get("description", "") or item.get("url", "")
             if raw_text:
                 enrichment = self.llm.enrich(raw_text, flavor, item.get("category"))
@@ -213,6 +214,8 @@ class Seeder:
                     from db.models import now_iso
                     llm_enriched_at = now_iso()
                     log.debug(f"  LLM enriched: {title}")
+        elif llm_enriched:
+            log.debug(f"  Using existing LLM enrichment: {title}")
 
         # Remove duplicates from tags
         technologies = list(set(technologies))

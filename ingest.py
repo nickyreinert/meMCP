@@ -20,58 +20,6 @@ def load_config(path: str = "config.yaml"):
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
-def _export_stages_to_yaml(stages_items: list, yaml_path: Path):
-    """
-    Export parsed stages entities to YAML file for manual editing.
-    Creates a LinkedIn-style YAML structure that can be loaded by LinkedInParser.
-    """
-    yaml_data = {
-        "experience": [],
-        "education": [],
-        "certifications": []
-    }
-    
-    # Group by type
-    for item in stages_items:
-        item_type = item.get("type")
-        ext = item.get("ext", {})
-        
-        if item_type == "professional":
-            yaml_data["experience"].append({
-                "company": ext.get("_company_title", ""),
-                "role": ext.get("role", ""),
-                "employment_type": ext.get("employment_type", "full_time"),
-                "location": ext.get("location"),
-                "start_date": item.get("start_date"),
-                "end_date": item.get("end_date"),
-                "description": item.get("description"),
-                "tags": item.get("tags", []),
-            })
-        
-        elif item_type == "education":
-            yaml_data["education"].append({
-                "institution": ext.get("_institution_title", ""),
-                "degree": ext.get("degree", ""),
-                "field": ext.get("field"),
-                "start_date": item.get("start_date"),
-                "end_date": item.get("end_date"),
-                "description": item.get("description"),
-                "tags": item.get("tags", []),
-            })
-        
-        elif item_type == "achievement":
-            yaml_data["certifications"].append({
-                "name": item.get("title"),
-                "issuer": ext.get("_issuer_title", ""),
-                "issued": item.get("start_date"),
-                "credential_id": ext.get("credential_id"),
-                "credential_url": ext.get("credential_url"),
-            })
-    
-    # Write YAML file
-    with open(yaml_path, "w") as f:
-        yaml.dump(yaml_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
 def main():
     parser = argparse.ArgumentParser(description="Ingest data from configured sources.")
     parser.add_argument("--force", action="store_true",
@@ -191,53 +139,33 @@ def main():
 
     # MODE 2: Normal fetch + seed (with optional LLM)
     all_items = []
+    scrapers_with_yaml = []  # Track (scraper, items) for YAML sync
 
-    #  ── STAGES INGESTION ────────────────────────────────────────────
+    # ── STAGES INGESTION (now uses connector architecture) ──────────
     stages_cfg = config.get("stages", {})
     if stages_cfg and not args.llm_only:
-        if not stages_cfg.get("enabled", True):
+        if args.source and args.source != "stages":
+            # Skip if source filter doesn't match
+            pass
+        elif not stages_cfg.get("enabled", True):
             log.info("Stages processing disabled in config")
         else:
-            source_type = stages_cfg.get("source_type", "linkedin_pdf")
-            source_path = Path(stages_cfg.get("source_path", "linkedin_profile.pdf"))
-            yaml_cache_path = Path(str(source_path) + ".yaml")
-
-            if source_type != "linkedin_pdf":
-                log.warning(f"Unsupported source_type '{source_type}'. Only 'linkedin_pdf' is supported.")
-            elif yaml_cache_path.exists():
-                # Load from YAML cache (user-edited or auto-generated)
-                log.info(f"Loading stages from YAML cache: {yaml_cache_path}")
-                from scrapers.scrapers import LinkedInParser
-                linkedin_parser = LinkedInParser(export_path=yaml_cache_path)
-                stages_items = linkedin_parser.parse()
-                all_items.extend(stages_items)
-                log.info(f"  Loaded {len(stages_items)} stages entities from cache")
-            elif source_path.exists():
-                # Parse PDF and create YAML cache
-                if args.disable_llm:
-                    log.warning(f"Skipping LinkedIn PDF ({source_path}) - LLM required for PDF parsing. Run without --disable-llm to create YAML cache at {yaml_cache_path}")
-                else:
-                    log.info(f"Parsing LinkedIn PDF (first run): {source_path}")
-                    log.info(f"  YAML cache will be created at: {yaml_cache_path}")
-                    from scrapers.linkedin_pdf import LinkedInPDFParser
-                    pdf_parser = LinkedInPDFParser(source_path, llm_enricher=enricher)
-                    stages_items = pdf_parser.parse()
+            log.info("Running stages source")
+            scraper = ScraperFactory.create("stages", stages_cfg, db_path=db_path, llm=enricher)
+            if scraper:
+                try:
+                    items = scraper.run(force=args.force)
+                    log.info(f"  Fetched {len(items)} items from stages")
+                    all_items.extend(items)
                     
-                    if stages_items:
-                        all_items.extend(stages_items)
-                        log.info(f"  Parsed {len(stages_items)} stages entities")
-                        
-                        # Export to YAML cache for future runs
-                        log.info(f"  Creating YAML cache for manual editing...")
-                        _export_stages_to_yaml(stages_items, yaml_cache_path)
-                        log.info(f"  ✓ YAML cache created at {yaml_cache_path}")
-                        log.info(f"  → Edit this file manually, then re-run (will load from cache)")
-            else:
-                log.warning(f"LinkedIn PDF not found: {source_path}")
+                    # Track scrapers that have YAML caches for later sync
+                    if hasattr(scraper, 'yaml_cache_path') and scraper.yaml_cache_path:
+                        scrapers_with_yaml.append((scraper, items))
+                except Exception as e:
+                    log.error(f"  Failed stages source: {e}")
 
     # ── OEUVRE INGESTION ────────────────────────────────────────────
     oeuvre_sources = config.get("oeuvre_sources", {})
-    scrapers_with_yaml = []  # Track (scraper, items) for YAML sync
     
     for name, cfg in oeuvre_sources.items():
         if args.source and name != args.source:
@@ -254,7 +182,7 @@ def main():
             cfg['limit'] = args.limit
             log.info(f"  Limiting to {args.limit} items")
         
-        scraper = ScraperFactory.create(name, cfg, db_path=db_path)
+        scraper = ScraperFactory.create(name, cfg, db_path=db_path, llm=enricher)
         if not scraper:
             continue
 

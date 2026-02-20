@@ -12,10 +12,11 @@ from db.models import get_db, DB_PATH
 log = logging.getLogger("mcp.scrapers")
 
 class BaseScraper(abc.ABC):
-    def __init__(self, name: str, config: Dict[str, Any], db_path: Path = DB_PATH):
+    def __init__(self, name: str, config: Dict[str, Any], db_path: Path = DB_PATH, llm=None):
         self.name = name
         self.config = config
         self.db_path = db_path
+        self.llm = llm  # Optional LLM enricher for PDF parsing etc.
         self.enabled = config.get("enabled", False)
         self.limit = config.get("limit", 0)
         self.yaml_cache_path: Optional[Path] = None  # Subclasses can set this
@@ -103,7 +104,7 @@ class BaseScraper(abc.ABC):
 
 class ScraperFactory:
     @staticmethod
-    def create(name: str, config: Dict[str, Any], db_path: Path = DB_PATH) -> Optional[BaseScraper]:
+    def create(name: str, config: Dict[str, Any], db_path: Path = DB_PATH, llm=None) -> Optional[BaseScraper]:
         if not config.get("enabled"):
             return None
 
@@ -111,19 +112,22 @@ class ScraperFactory:
 
         if connector == "github_api":
             from .github import GithubScraper
-            return GithubScraper(name, config, db_path)
+            return GithubScraper(name, config, db_path, llm=llm)
         elif connector == "rss":
             from .rss import RSSScraper
-            return RSSScraper(name, config, db_path)
+            return RSSScraper(name, config, db_path, llm=llm)
         elif connector == "manual":
             from .manual import ManualScraper
-            return ManualScraper(name, config, db_path)
+            return ManualScraper(name, config, db_path, llm=llm)
         elif connector == "sitemap":
             from .sitemap import SitemapScraper
-            return SitemapScraper(name, config, db_path)
+            return SitemapScraper(name, config, db_path, llm=llm)
         elif connector == "medium_raw":
             from .medium_raw import MediumRawScraper
-            return MediumRawScraper(name, config, db_path)
+            return MediumRawScraper(name, config, db_path, llm=llm)
+        elif connector == "linkedin_pdf":
+            from .linkedin_pdf_scraper import LinkedInPDFScraper
+            return LinkedInPDFScraper(name, config, db_path, llm=llm)
         else:
             log.warning(f"Unknown connector '{connector}' for source '{name}'")
             return None
