@@ -123,7 +123,29 @@ python ingest.py --source medium
 python ingest.py --dry-run
 ```
 
-### 4. Run Server
+### 4. Calculate Metrics (Optional)
+
+Calculate metrics for all skills, technologies, and tags:
+
+```bash
+# Calculate metrics for all tags
+python recalculate_metrics.py
+
+# Calculate only specific tag type
+python recalculate_metrics.py --type skill
+python recalculate_metrics.py --type technology
+python recalculate_metrics.py --type generic
+
+# Force recalculation (ignore version)
+python recalculate_metrics.py --force
+
+# Verbose output with top 10 rankings
+python recalculate_metrics.py --verbose
+```
+
+Metrics are automatically calculated during `ingest.py` runs, but you can recalculate them independently without re-fetching data.
+
+### 5. Run Server
 
 ```bash
 # Start the FastAPI server with uvicorn
