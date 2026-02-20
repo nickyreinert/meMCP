@@ -206,7 +206,7 @@ class Seeder:
                     skills.extend(enrichment.get("skills", []))
                     tags.extend(enrichment.get("tags", []))
                     llm_enriched = True
-                    llm_model = self.llm.model_name
+                    llm_model = self.llm.model
                     from db.models import now_iso
                     llm_enriched_at = now_iso()
                     log.debug(f"  LLM enriched: {title}")
@@ -327,7 +327,7 @@ class Seeder:
                 (
                     enrichment.get("description") or entity.get("description"),
                     llm_enriched_at,
-                    self.llm.model_name,
+                    self.llm.model,
                     now_iso(),
                     entity_id
                 )
@@ -359,7 +359,7 @@ class Seeder:
                     technologies=enrichment.get("technologies", []),
                     skills=enrichment.get("skills", []),
                     tags=enrichment.get("tags", []),
-                    llm_model=self.llm.model_name,
+                    llm_model=self.llm.model,
                     llm_enriched_at=llm_enriched_at
                 )
             
