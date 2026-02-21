@@ -5,7 +5,6 @@
         <title>mcp://nickyreinert.berlin.germany.europe.earth.solarsystem.orionarm.milkyway.localgroup.virgosupercluster.laniakea.piscescetus.universe</title>
         <style>
             html, body {
-                /* get me a oldschool green on black terminal vibe going on here */
                 background-color: #000;
                 color: #0f0;
                 font-family: 'Courier New', Courier, monospace;
@@ -25,13 +24,8 @@
                 padding: 1rem;
                 overflow-x: auto;
                 border-radius: 4px;
-            }
-            .endpoint-list {
-                list-style-type: none;
-                padding-left: 0;
-            }
-            .endpoint-list li {
-                margin: 0.5rem 0;
+                white-space: pre-wrap;
+                word-wrap: break-word;
             }
         </style>
     </head>
@@ -40,31 +34,30 @@
         <p>Put this prompt into your LLM of trust to work with this service:</p>
     
         <pre>
+Act as a profile analyst. You have access to an MCP server at {{ base_url }}. Your goal is to reach 100% data coverage to create a high-precision report.
 
-Act as a profile analyst. You have access to an MCP server at {{ base_url }} which provides structured JSON data about a person's career, skills, and projects. Your task is to analyze this data to create a comprehensive profile report.
-
-1. INITIAL DISCOVERY:
-First, fetch the description of the data model and relations from the root. Then, list all available tools/resources to identify any undocumented endpoints beyond the standard ones.
+1. COVERAGE & DISCOVERY:
+- Monitor HTTP headers: 'X-Coverage-Percentage' and 'X-Coverage-Is-Relevant'.
+- If coverage is &lt; 100%, check https://mcp.nickyreinert.de/coverage to identify missing relevant pages.
+- Fetch the data model and list all tools/resources to find undocumented endpoints.
 
 2. DATA RETRIEVAL:
-- Fetch 'stages' (Career timeline) and 'oeuvre' (Side projects/articles).
-- Fetch 'skills', 'technologies', and 'tags'.
-- FOR EACH item in stages/oeuvre: Use the provided IDs to fetch deep-dive details if separate GET endpoints exist (e.g., /stages/{id}).
+- Fetch 'stages' (Career), 'oeuvre' (Projects), 'skills', 'technologies', and 'tags'.
+- Recursively fetch deep-dive details for specific IDs if endpoints like /stages/{id} exist.
 
-3. ANALYSIS & WEIGHTING:
-- Map 'skills' and 'technologies' to specific 'stages' or 'oeuvre' items.
-- Weight the expertise: Prioritize items where (Confidence > 0.8) AND (Recency is within the last 2 years). 
-- If a skill has high confidence but low recency, label it as "Legacy Expertise."
+3. METRIC COMPUTATION (The Formula):
+For every skill/tag, calculate the 'Relevance Score' using:
+Score = (Proficiency * 0.30) + (Frequency * 0.20) + (Recency * 0.20) + (Diversity * 0.15) + (Experience * 0.10) + (Growth * 0.05)
+- Apply 'stale_penalty' (-15) if unused for > 5 years.
+- Apply 'current_bonus' (+10) for active items.
 
 4. COMPREHENSIVE REPORT:
-Construct a report with these sections:
-- Executive Summary: The "red thread" of this person's career.
-- Primary Stack: Top 5 technologies based on the calculated weight.
-- Project Highlights: A synthesized view of the 'oeuvre' items that demonstrate the highest skill density.
-- Evolution: How the 'tags' have shifted over the timeline.
+- Executive Summary: The "red thread" of the career trajectory.
+- Expertise Matrix: A Markdown table showing: Skill, Proficiency, Years of Exp, Growth Trend, and Calculated Relevance.
+- Evolution: Analyze how 'tags' and 'diversity' have shifted over the timeline.
+- Visualization Base: Provide a Mermaid.js Quadrant Chart (X: Proficiency, Y: Relevance) to map the profile.
 
-If any endpoint returns an error or empty set, attempt to find the information by cross-referencing other tags or related items.
-
+Ensure 100% coverage before finalizing.
         </pre>
         
         Language support: Add ?lang=de for German or Accept-Language header
@@ -73,9 +66,9 @@ If any endpoint returns an error or empty set, attempt to find the information b
 
         <h2>Example:</h2>
         <pre>
-            curl {{ base_url }}/?lang=de
-            curl {{ base_url }}/skills
-            curl -H "Accept-Language: de" {{ base_url }}/entities
+curl {{ base_url }}/?lang=de
+curl {{ base_url }}/skills
+curl -H "Accept-Language: de" {{ base_url }}/entities
         </pre>
         
         <center><small><i>~ all your base are belong to us ~</i></small></center>
