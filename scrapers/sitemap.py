@@ -75,7 +75,7 @@ class SitemapScraper(BaseScraper):
         
         # Save to cache file if specified
         if cache_file and entities:
-            self._save_to_cache(cache_file, entities)
+            self._save_entities_to_yaml(cache_file, entities)
             log.info(f"✓ Cache file updated: {self.yaml_cache_path}")
         
         return entities
@@ -289,7 +289,7 @@ class SitemapScraper(BaseScraper):
         log.info(f"Loaded {len(results)} entities from cache: {cache_path.name} (last_synced: {last_synced})")
         return results
     
-    def _save_to_cache(self, cache_file: str, entities: List[Dict[str, Any]]):
+    def _save_entities_to_yaml(self, cache_file: str, entities: List[Dict[str, Any]]):
         """
         Save entities to YAML cache using yaml_sync module (atomic write).
         

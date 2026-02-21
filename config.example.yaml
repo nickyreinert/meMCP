@@ -21,6 +21,56 @@ watch_interval_minutes: 120
 # You can then edit these files and update DB with: python ingest.py --yaml-update --file data/<source>_export.yaml
 auto_export_yaml: true
 
+# ── Session Tracking & Coverage Monitoring ─────────────────
+# Tracks API client sessions to help LLM agents explore systematically
+#
+# Features:
+#   - Anonymized logging (IP last octet removed)
+#   - Unique visitor ID: hash(anonymized_ip + user_agent)
+#   - SQLite persistence for sessions across restarts
+#   - Coverage tracking with pagination awareness
+#   - GET /coverage endpoint shows missing endpoints
+#
+# Pagination Logic:
+#   - Non-paginated endpoints: 100% on first visit
+#   - Paginated endpoints:
+#     * 1 page visited → 50% coverage
+#     * 2 pages visited → 75% coverage
+#     * 3+ pages visited → 100% coverage
+#
+# Session Reset:
+#   - Visiting root endpoint (/) resets session
+#   - Sessions auto-expire after timeout_hours
+#
+# Response Headers (on every request):
+#   X-Coverage-Percentage: 30.0
+#   X-Coverage-Visited: 3
+#   X-Coverage-Total: 10
+#   X-Session-Request-Count: 5
+#
+session:
+  enabled: true
+  timeout_hours: 5              # Session expiry (hours)
+  log_file: logs/api_access.log # File logging path
+  track_coverage: true          # Enable coverage tracking
+  db_path: db/sessions.db       # SQLite database path
+  
+  # Relevant endpoints for coverage tracking (endpoints with metrics)
+  # Format: endpoint_pattern: {paginated: true|false}
+  # Each endpoint counts equally (1 point)
+  # Paginated endpoints need multiple pages for 100% coverage
+  relevant_endpoints:
+    /greeting: {paginated: false}        # Personal identity
+    /stages: {paginated: true}           # Career timeline list
+    /stages/{id}: {paginated: false}     # Single stage detail
+    /oeuvre: {paginated: true}           # Projects/articles list
+    /oeuvre/{id}: {paginated: false}     # Single project detail
+    /skills: {paginated: true}           # All skills with metrics
+    /skills/{name}: {paginated: false}   # Skill detail
+    /technology: {paginated: true}       # All technologies with metrics
+    /technology/{name}: {paginated: false} # Technology detail
+    /tags/{tag_name}: {paginated: false}   # Tag detail with metrics
+
 # ── Your identity ────────────────────────────────────────────
 # fixed values, will be added to the generic endpoint
 # supports multi languages, e.g. identity.de.name → "name": "Nicky Reinert" in the German version of the profile

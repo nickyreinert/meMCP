@@ -1,5 +1,91 @@
 # UNFINISHED TASKS
 
+## 2026-02-21 19:15 - Enhanced Session Tracking with Pagination & SQLite
+
+**Status**: Complete
+
+**What's Done**:
+- ✅ Moved relevant endpoints to config.yaml (configurable, weighted)
+- ✅ Created SQLite schema for persistent sessions (sessions, session_coverage, request_log)
+- ✅ Implemented pagination-aware coverage tracking
+  - Paginated endpoints: 50% for 1 page, 75% for 2 pages, 100% for 3+ pages
+  - Non-paginated endpoints: 100% on first visit
+  - Weighted coverage calculation
+- ✅ Refactored SessionTracker to use SQLite backend
+- ✅ Added GET /coverage endpoint with detailed report
+  - Shows missing endpoints
+  - Shows incomplete endpoints (paginated with partial coverage)
+  - Full breakdown with pages visited per endpoint
+- ✅ Enhanced middleware to track pagination (offset, page, skip params)
+- ✅ Updated response headers with earned/total weight
+
+**Architecture Changes**:
+- Relevant endpoints now configured in config.yaml with weight and pagination flags
+- SQLite persistence: db/sessions.db (3 tables)
+- Pagination tracking via query params (offset, limit, page, skip)
+- Coverage calculated as weighted percentage
+- GET /coverage provides actionable feedback to LLM agents
+
+**Testing**:
+- ✅ Pagination tracking: 3 pages = 100%, 1 page = 50%
+- ✅ Coverage endpoint shows missing + incomplete
+- ✅ SQLite persistence verified (1 session, 5 coverage entries, 12 logs)
+- ✅ Response headers with weighted metrics
+- ✅ File logging with anonymized IP
+
+**Files Modified**:
+- `config.yaml` (added session.relevant_endpoints with weights)
+- `app/session_tracker.py` (complete rewrite for SQLite + pagination)
+- `app/main.py` (updated middleware, added /coverage endpoint)
+
+**Config Example**:
+```yaml
+session:
+  relevant_endpoints:
+    /greeting: {weight: 1.0, paginated: false}
+    /stages: {weight: 0.5, paginated: true}
+    /skills: {weight: 0.5, paginated: true}
+```
+
+## 2026-02-21 18:50 - Session Tracking & Coverage Monitoring
+
+**Status**: Complete
+
+**What's Done**:
+- ✅ Added session configuration to config.yaml (timeout_hours, log_file, track_coverage)
+- ✅ Created app/session_tracker.py module for session management
+- ✅ Implemented IP anonymization (last octet removed)
+- ✅ Created unique visitor ID via hash(anonymized_ip + user_agent)
+- ✅ Added middleware for automatic request tracking
+- ✅ Coverage tracking for metric-relevant endpoints (10 total)
+- ✅ Session reset mechanism when hitting root endpoint (/)
+- ✅ Response headers with coverage metadata (X-Coverage-*, X-Session-*)
+- ✅ File logging to logs/api_access.log
+- ✅ Increased rate limits (30→120, 60→200, 20→60 per minute)
+- ✅ Tested: session tracking, coverage calculation, reset mechanism
+
+**Architecture**:
+- Relevant endpoints (with metrics): /greeting, /stages, /stages/{id}, /oeuvre, /oeuvre/{id}, /skills, /skills/{name}, /technology, /technology/{name}, /tags/{tag_name}
+- Coverage returned as percentage + X out of N endpoints visited
+- Sessions expire after 5 hours (configurable)
+- Middleware injects headers into every response
+- Root endpoint (/) resets session and includes reset explanation
+
+**Files Created**:
+- `app/session_tracker.py` (new)
+- `logs/api_access.log` (auto-created)
+
+**Files Modified**:
+- `config.yaml` (added session block)
+- `app/main.py` (import tracker, initialize, add middleware, update root endpoint, increase rate limits)
+
+**Testing**:
+- ✅ Coverage increases correctly (10% → 20% → 30% → 40% → 50%)
+- ✅ Session reset works (coverage returns to 0%)
+- ✅ Headers present on all responses
+- ✅ Detail endpoints (/oeuvre/{id}) normalize correctly
+- ✅ Logging captures all requests with anonymized IP
+
 ## 2026-02-20 23:15 - Identity Data Refactoring
 
 **Status**: Complete

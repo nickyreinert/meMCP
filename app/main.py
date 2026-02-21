@@ -73,6 +73,8 @@ from db.models import (
     query_technologies_with_metrics,
 )
 
+from app.session_tracker import SessionTracker
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG & TEMPLATES
@@ -98,11 +100,23 @@ BASE_URL = server_cfg.get("base_url", f"http://{display_host}:{port}")
 # Templates directory
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# Session tracker
+session_cfg = CONFIG.get("session", {})
+if session_cfg.get("enabled", True):
+    session_tracker = SessionTracker(
+        timeout_hours=session_cfg.get("timeout_hours", 5.0),
+        log_file=session_cfg.get("log_file", "logs/api_access.log"),
+        db_path=session_cfg.get("db_path", "db/sessions.db"),
+        relevant_endpoints=session_cfg.get("relevant_endpoints", {})
+    )
+else:
+    session_tracker = None
+
 # ─────────────────────────────────────────────────────────────────────────────
 # APP SETUP
 # ─────────────────────────────────────────────────────────────────────────────
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["30/minute"])
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
 
 @asynccontextmanager
@@ -128,6 +142,58 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION TRACKING MIDDLEWARE
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def session_tracking_middleware(request: Request, call_next):
+    """
+    Track all requests and inject coverage metadata into responses.
+    
+    For each request:
+      1. Extract IP and User-Agent
+      2. Track in session (anonymized)
+      3. Calculate coverage
+      4. Inject metadata into response
+    """
+    # Get client info
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    endpoint = request.url.path
+    method = request.method
+    
+    # Extract query params for pagination detection
+    query_params = dict(request.query_params) if request.query_params else None
+    
+    # Track request if enabled
+    coverage_meta = None
+    if session_tracker:
+        coverage_meta = session_tracker.track_request(
+            ip_address=client_ip,
+            user_agent=user_agent,
+            endpoint=endpoint,
+            method=method,
+            query_params=query_params
+        )
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Inject coverage metadata as headers (for easy access by LLM agents)
+    if coverage_meta and "coverage" in coverage_meta:
+        cov = coverage_meta["coverage"]
+        response.headers["X-Session-Visitor-ID"] = coverage_meta["visitor_id"]
+        response.headers["X-Session-Request-Count"] = str(coverage_meta["session"]["request_count"])
+        response.headers["X-Coverage-Visited"] = str(cov.get("visited_count", 0))
+        response.headers["X-Coverage-Total"] = str(cov.get("total_count", 0))
+        response.headers["X-Coverage-Percentage"] = f"{cov.get('percentage', 0):.1f}"
+        response.headers["X-Coverage-Earned-Points"] = f"{cov.get('earned_points', 0):.2f}"
+        response.headers["X-Coverage-Total-Points"] = str(cov.get("total_points", 0))
+    
+    return response
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,11 +315,30 @@ RELATION_META = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", summary="API index", response_class=HTMLResponse)
-@limiter.limit("60/minute")
+@limiter.limit("120/minute")
 async def index(request: Request):
+    # Reset session when hitting root endpoint
+    if session_tracker:
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+        session_tracker.reset_session(client_ip, user_agent)
+    
+    session_info = {}
+    if session_tracker:
+        session_cfg = CONFIG.get("session", {})
+        session_info = {
+            "enabled": True,
+            "timeout_hours": session_cfg.get("timeout_hours", 5.0),
+            "reset_trigger": "Visiting this root endpoint (/) resets your session and coverage tracking",
+            "tracked_via": "Response headers (X-Coverage-*, X-Session-*)",
+            "coverage_explanation": "Coverage tracks metric-relevant endpoints: /greeting, /stages, /oeuvre, /skills, /technology, /tags/{name}",
+            "tip": "Check response headers for X-Coverage-Percentage to see exploration progress",
+        }
+    
     data = {
         "name":    "Personal MCP Server",
         "version": APP_VERSION,
+        "session": session_info,
         "languages": {
             "supported":   list(SUPPORTED_LANGS),
             "default":     DEFAULT_LANG,
@@ -261,6 +346,7 @@ async def index(request: Request):
         },
         "routes": {
             "/greeting":               "Identity card — name, tagline, bio, links",
+            "/coverage":               "Session coverage report — see which endpoints you've visited and what's missing",
             "/languages":              "Translation coverage per language",
             "/entities":               "Paginated entity list with filters (category (stage|oeuvre), sub_category(study|school|intern|part-time), skills, technology, tags)",
             "/entities/{id}":          "Single entity + extension data + relations",
@@ -298,10 +384,42 @@ async def health():
     return {"status": "ok", "ts": time.time(), "version": APP_VERSION}
 
 
+@app.get("/coverage", summary="Session coverage report")
+@limiter.limit("200/minute")
+async def coverage_report(request: Request):
+    """
+    Returns detailed coverage report for the current session.
+    Shows which endpoints have been visited and which are missing.
+    
+    Use this to understand your exploration progress and identify
+    endpoints you haven't visited yet.
+    
+    Response includes:
+      - Overall coverage percentage (weighted by endpoint importance)
+      - List of missing endpoints
+      - List of incomplete endpoints (paginated endpoints with partial coverage)
+      - Detailed breakdown per endpoint with pages visited
+    
+    Note: Coverage is based on relevant endpoints that have metrics.
+    Not all API endpoints count towards coverage.
+    """
+    if not session_tracker:
+        return ok({
+            "enabled": False,
+            "message": "Session tracking is disabled in config.yaml"
+        })
+    
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    
+    coverage_data = session_tracker.get_coverage(client_ip, user_agent)
+    return ok(coverage_data)
+
+
 # ── Language coverage ─────────────────────────────────────────────────────────
 
 @app.get("/languages", summary="Language support + translation coverage")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def languages(request: Request, conn=Depends(db)):
     """
     Returns each supported language with translation coverage percentage.
@@ -339,7 +457,7 @@ async def languages(request: Request, conn=Depends(db)):
 # ── Greeting ──────────────────────────────────────────────────────────────────
 
 @app.get("/greeting", summary="Identity card (translated)")
-@limiter.limit("60/minute")
+@limiter.limit("200/minute")
 async def greeting(
     request: Request,
     conn=Depends(db),
@@ -404,7 +522,7 @@ async def greeting(
 # ── Categories ────────────────────────────────────────────────────────────────
 
 @app.get("/categories", summary="Entity flavors + counts")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def categories(request: Request, conn=Depends(db)):
     rows = conn.execute("""
         SELECT flavor, category, COUNT(*) as count FROM entities
@@ -427,7 +545,7 @@ async def categories(request: Request, conn=Depends(db)):
 # ── Entities list ─────────────────────────────────────────────────────────────
 
 @app.get("/entities", summary="List entities (paginated, translated)")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def entities_list(
     request: Request,
     conn=Depends(db),
@@ -473,7 +591,7 @@ async def entities_list(
 # ── Single entity ─────────────────────────────────────────────────────────────
 
 @app.get("/entities/{entity_id}", summary="Single entity detail (translated)")
-@limiter.limit("60/minute")
+@limiter.limit("200/minute")
 async def entity_detail(
     request: Request,
     entity_id: str,
@@ -501,7 +619,7 @@ async def entity_detail(
 # ── Entity neighbours ─────────────────────────────────────────────────────────
 
 @app.get("/entities/{entity_id}/related", summary="Entity graph neighbours (translated)")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def entity_related(
     request: Request,
     entity_id: str,
@@ -526,7 +644,7 @@ async def entity_related(
 # ── Category ──────────────────────────────────────────────────────────────────
 
 @app.get("/category/{entity_flavor}", summary="Entities by flavor (translated)")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def category(
     request: Request,
     entity_flavor: str,
@@ -562,14 +680,14 @@ async def category(
 # ── Tags ──────────────────────────────────────────────────────────────────────
 
 @app.get("/tags", summary="All tags + counts")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def tags_route(request: Request, conn=Depends(db)):
     all_tags = list_all_tags(conn)
     return ok({"tags": all_tags, "count": len(all_tags)})
 
 
 @app.get("/tags/{tag_name}", summary="Entities with a specific generic tag")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def tag_detail(
     request: Request,
     tag_name: str,
@@ -595,7 +713,7 @@ async def tag_detail(
 # ── Search ────────────────────────────────────────────────────────────────────
 
 @app.get("/search", summary="Full-text search (translated results)")
-@limiter.limit("20/minute")
+@limiter.limit("60/minute")
 async def search(
     request: Request,
     conn=Depends(db),
@@ -620,7 +738,7 @@ async def search(
 # ── Relation graph ────────────────────────────────────────────────────────────
 
 @app.get("/graph", summary="Entity-tag graph visualization")
-@limiter.limit("20/minute")
+@limiter.limit("60/minute")
 async def graph(
     request: Request,
     conn=Depends(db),
@@ -657,7 +775,7 @@ async def graph(
 # ── Skills ────────────────────────────────────────────────────────────────────
 
 @app.get("/skills", summary="All skills with entity counts and metrics")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def skills_list(
     request: Request,
     conn=Depends(db),
@@ -693,7 +811,7 @@ async def skills_list(
 
 
 @app.get("/skills/{skill_name}", summary="Entities with a specific skill and metrics")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def skill_detail(
     request: Request,
     skill_name: str,
@@ -726,7 +844,7 @@ async def skill_detail(
 # ── Technology ───────────────────────────────────────────────────────────────
 
 @app.get("/technology", summary="All technologies with entity counts and metrics")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def technologies_list(
     request: Request,
     conn=Depends(db),
@@ -753,7 +871,7 @@ async def technologies_list(
 
 
 @app.get("/technology/{tech_name}", summary="Entities that used a technology with metrics")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def technology_detail(
     request: Request,
     tech_name: str,
@@ -786,7 +904,7 @@ async def technology_detail(
 # ── Stages ────────────────────────────────────────────────────────────────────
 
 @app.get("/stages", summary="Career + education timeline")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def stages_list(
     request: Request,
     conn=Depends(db),
@@ -833,7 +951,7 @@ async def stages_list(
 
 
 @app.get("/stages/{entity_id}", summary="Single career/education stage")
-@limiter.limit("60/minute")
+@limiter.limit("200/minute")
 async def stage_detail(
     request: Request,
     entity_id: str,
@@ -861,7 +979,7 @@ async def stage_detail(
 # ── Oeuvre ───────────────────────────────────────────────────────────────────
 
 @app.get("/oeuvre", summary="Side projects + literature")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 async def oeuvre_list(
     request: Request,
     conn=Depends(db),
@@ -907,7 +1025,7 @@ async def oeuvre_list(
 
 
 @app.get("/oeuvre/{entity_id}", summary="Single oeuvre item detail")
-@limiter.limit("60/minute")
+@limiter.limit("200/minute")
 async def oeuvre_detail(
     request: Request,
     entity_id: str,
