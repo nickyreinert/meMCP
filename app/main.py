@@ -1,7 +1,13 @@
 """
-app/main.py — Personal MCP FastAPI Server v2.1
+app/main.py — Personal MCP FastAPI Server v2.2
 ===============================================
 All routes return structured JSON. Entity graph is the backbone.
+
+MCP Compatibility:
+  /schema                        → Explicit data model definition
+  /index                         → Deterministic discovery root (all entity links)
+  /coverage                      → Machine-readable coverage contract
+  X-Coverage-* headers           → Coverage metadata on every response
 
 Language support:
   Every data route accepts language via two mechanisms (priority order):
@@ -12,27 +18,30 @@ Language support:
   Every response includes a "_lang" meta field.
 
 Routes:
-  GET /                          → API index
+  GET /                          → API index (JSON)
+  GET /human                     → Human-friendly doc (hidden endpoint, not in API index)
+  GET /schema                    → Data model schema (MCP)
+  GET /index                     → Discovery root with all entity links (MCP)
+  GET /coverage                  → Coverage contract (MCP)
   GET /greeting                  → identity card (translated)
   GET /categories                → entity type list + counts
   GET /entities                  → paginated entity list (translated)
   GET /entities/{id}             → single entity + relations (translated)
   GET /entities/{id}/related     → graph neighbours (translated)
   GET /category/{type}           → entities by type (translated)
-  GET /technology_stack          → all technology entities
-  GET /technology_stack/{tag}    → tech cross-reference (translated)
+  GET /technology                → all technology entities
+  GET /technology/{tag}          → tech cross-reference (translated)
   GET /tags                      → all tags + counts
   GET /search?q=                 → full-text search (translated)
   GET /graph                     → relation graph query
   GET /languages                 → supported languages + translation coverage
   GET /skills                    → all skills + entity counts
   GET /skills/{name}             → detail: entities with this skill
-  GET /technologies              → all technologies + entity counts
-  GET /technologies/{name}       → detail: entities that used this tech
+  GET /technologies              → all technologies + entity counts (alias for /technology)
   GET /stages                    → career timeline (jobs + education)
   GET /stages/{id}               → single stage detail
-  GET /work                      → side projects + literature
-  GET /work/{id}                 → single work item detail
+  GET /oeuvre                    → side projects + literature
+  GET /oeuvre/{id}               → single work item detail
   POST /admin/rebuild            → trigger scrape rebuild (token required)
   POST /admin/translate          → trigger translation run (token required)
   GET /health                    → liveness check
@@ -314,9 +323,15 @@ RELATION_META = {
 # ROUTES
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/", summary="API index", response_class=HTMLResponse)
+@app.get("/", summary="API index")
 @limiter.limit("120/minute")
 async def index(request: Request):
+    """
+    API root endpoint — returns machine-readable JSON index.
+    
+    For human-friendly documentation, visit /human (not linked in API responses).
+    Resets session tracking when accessed.
+    """
     # Reset session when hitting root endpoint
     if session_tracker:
         client_ip = request.client.host if request.client else "unknown"
@@ -344,6 +359,11 @@ async def index(request: Request):
             "default":     DEFAULT_LANG,
             "negotiation": "?lang=de  or  Accept-Language: de header",
         },
+        "mcp": {
+            "schema":    "/schema — Explicit data model definition (MCP-compliant)",
+            "index":     "/index — Discovery root with all entity links",
+            "coverage":  "/coverage — Coverage contract (JSON)",
+        },
         "routes": {
             "/greeting":               "Identity card — name, tagline, bio, links",
             "/coverage":               "Session coverage report — see which endpoints you've visited and what's missing",
@@ -367,53 +387,452 @@ async def index(request: Request):
         "entity_types":   ENTITY_META,
         "relation_types": RELATION_META,
     }
-    json_str = json.dumps(ok(data), indent=2)
-    return f"<script>window.location.href='/human';</script>{json_str}"
+    return JSONResponse(content=ok(data), media_type="application/json")
 
 
 @app.get("/human", response_class=HTMLResponse)
 async def human_endpoint(request: Request):
-    """Human-friendly instructions page."""
+    """
+    Human-friendly instructions page.
+    
+    Note: This endpoint is intentionally not listed in API index responses.
+    It's documented here only as 'human doc' for manual browsing.
+    """
     return templates.TemplateResponse(
         "human.html",
         {"request": request, "base_url": BASE_URL}
     )
+
+
+@app.get("/index", summary="MCP discovery root")
+@limiter.limit("120/minute")
+async def index_endpoint(request: Request, conn=Depends(db)):
+    """
+    Deterministic discovery root for MCP (Machine Context Protocol).
+    
+    Returns direct links to all entities across all flavors.
+    No hidden entities. No pagination (all entities returned).
+    
+    This endpoint provides complete entity graph enumeration for
+    machine traversal and coverage verification.
+    """
+    # Get all public entities
+    stages = conn.execute(
+        "SELECT id, title FROM entities WHERE flavor='stages' AND visibility='public' ORDER BY start_date DESC"
+    ).fetchall()
+    
+    oeuvre = conn.execute(
+        "SELECT id, title FROM entities WHERE flavor='oeuvre' AND visibility='public' ORDER BY date DESC"
+    ).fetchall()
+    
+    # Get all unique skills
+    skills = conn.execute(
+        "SELECT DISTINCT tag FROM tags WHERE tag_type='skill' ORDER BY tag"
+    ).fetchall()
+    
+    # Get all unique technologies
+    technologies = conn.execute(
+        "SELECT DISTINCT tag FROM tags WHERE tag_type='technology' ORDER BY tag"
+    ).fetchall()
+    
+    # Get all unique generic tags
+    tags = conn.execute(
+        "SELECT DISTINCT tag FROM tags WHERE tag_type='generic' ORDER BY tag"
+    ).fetchall()
+    
+    return ok({
+        "discovery_root": True,
+        "version": APP_VERSION,
+        "total_entities": len(stages) + len(oeuvre),
+        "stages": [
+            {"id": row['id'], "title": row['title'], "url": f"/stages/{row['id']}"}
+            for row in stages
+        ],
+        "oeuvre": [
+            {"id": row['id'], "title": row['title'], "url": f"/oeuvre/{row['id']}"}
+            for row in oeuvre
+        ],
+        "skills": [
+            {"name": row['tag'], "url": f"/skills/{row['tag']}"}
+            for row in skills
+        ],
+        "technologies": [
+            {"name": row['tag'], "url": f"/technology/{row['tag']}"}
+            for row in technologies
+        ],
+        "tags": [
+            {"name": row['tag'], "url": f"/tags/{row['tag']}"}
+            for row in tags
+        ],
+        "collections": {
+            "stages": "/stages",
+            "oeuvre": "/oeuvre",
+            "skills": "/skills",
+            "technologies": "/technology",
+            "tags": "/tags"
+        }
+    })
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "ts": time.time(), "version": APP_VERSION}
 
 
+@app.get("/schema", summary="MCP data model schema")
+@limiter.limit("120/minute")
+async def schema(request: Request):
+    """
+    Machine-discoverable data model for MCP (Machine Context Protocol) compatibility.
+    
+    Defines the complete object graph, relations, and analytics fields.
+    This endpoint is canonical for understanding the structure of all data returned by this API.
+    """
+    return ok({
+        "version": "1.0",
+        "description": "Personal profile entity graph with multi-language support",
+        "entity_types": {
+            "personal": {
+                "description": "Static identity information",
+                "primary_key": "id",
+                "categories": None,
+                "fields": {
+                    "id": {"type": "string", "format": "uuid", "required": True},
+                    "flavor": {"type": "string", "enum": ["personal"], "required": True},
+                    "title": {"type": "string", "required": True},
+                    "description": {"type": "string", "nullable": True},
+                    "url": {"type": "string", "format": "uri", "nullable": True},
+                    "canonical_url": {"type": "string", "format": "uri", "nullable": True},
+                    "source": {"type": "string", "nullable": True},
+                    "visibility": {"type": "string", "enum": ["public", "private"], "default": "public"},
+                    "tags": {"type": "array", "items": {"$ref": "#/tag_types"}},
+                    "created_at": {"type": "string", "format": "date-time", "required": True},
+                    "updated_at": {"type": "string", "format": "date-time", "required": True}
+                }
+            },
+            "stages": {
+                "description": "Career and education timeline with temporal data",
+                "primary_key": "id",
+                "categories": ["education", "job"],
+                "temporal_semantics": {
+                    "start_date": {
+                        "field": "start_date",
+                        "format": "ISO-8601 (full or partial: YYYY, YYYY-MM, YYYY-MM-DD)",
+                        "description": "When this stage began"
+                    },
+                    "end_date": {
+                        "field": "end_date",
+                        "format": "ISO-8601 or null for ongoing",
+                        "description": "When this stage ended (null = ongoing)"
+                    },
+                    "is_current": {
+                        "field": "is_current",
+                        "type": "boolean",
+                        "description": "Whether this stage is currently active (derived: end_date IS NULL)"
+                    },
+                    "recency": {
+                        "description": "Calculated from end_date (or current date if ongoing)",
+                        "unit": "days",
+                        "reference_date": "current UTC date"
+                    },
+                    "duration": {
+                        "description": "Time between start_date and end_date (or current date)",
+                        "unit": "years",
+                        "used_for": "experience_years calculation"
+                    }
+                },
+                "fields": {
+                    "id": {"type": "string", "format": "uuid", "required": True},
+                    "flavor": {"type": "string", "enum": ["stages"], "required": True},
+                    "category": {"type": "string", "enum": ["education", "job"], "nullable": True},
+                    "title": {"type": "string", "required": True},
+                    "description": {"type": "string", "nullable": True},
+                    "url": {"type": "string", "format": "uri", "nullable": True},
+                    "canonical_url": {"type": "string", "format": "uri", "nullable": True},
+                    "source": {"type": "string", "nullable": True},
+                    "start_date": {"type": "string", "format": "ISO-8601", "nullable": True},
+                    "end_date": {"type": "string", "format": "ISO-8601", "nullable": True, "description": "null = ongoing"},
+                    "is_current": {"type": "integer", "enum": [0, 1], "default": 0},
+                    "visibility": {"type": "string", "enum": ["public", "private"], "default": "public"},
+                    "tags": {"type": "array", "items": {"$ref": "#/tag_types"}},
+                    "created_at": {"type": "string", "format": "date-time", "required": True},
+                    "updated_at": {"type": "string", "format": "date-time", "required": True}
+                },
+                "analytics_fields": ["start_date", "end_date", "is_current"]
+            },
+            "oeuvre": {
+                "description": "Work portfolio: projects, articles, publications",
+                "primary_key": "id",
+                "categories": ["coding", "blog_post", "article", "book", "website"],
+                "temporal_semantics": {
+                    "date": {
+                        "field": "date",
+                        "format": "ISO-8601",
+                        "description": "Publication or creation date"
+                    },
+                    "recency": {
+                        "description": "Days since publication",
+                        "unit": "days",
+                        "reference_date": "current UTC date"
+                    }
+                },
+                "fields": {
+                    "id": {"type": "string", "format": "uuid", "required": True},
+                    "flavor": {"type": "string", "enum": ["oeuvre"], "required": True},
+                    "category": {"type": "string", "enum": ["coding", "blog_post", "article", "book", "website"], "nullable": True},
+                    "title": {"type": "string", "required": True},
+                    "description": {"type": "string", "nullable": True},
+                    "url": {"type": "string", "format": "uri", "nullable": True},
+                    "canonical_url": {"type": "string", "format": "uri", "nullable": True},
+                    "source": {"type": "string", "nullable": True},
+                    "date": {"type": "string", "format": "ISO-8601", "nullable": True},
+                    "visibility": {"type": "string", "enum": ["public", "private"], "default": "public"},
+                    "tags": {"type": "array", "items": {"$ref": "#/tag_types"}},
+                    "created_at": {"type": "string", "format": "date-time", "required": True},
+                    "updated_at": {"type": "string", "format": "date-time", "required": True}
+                },
+                "analytics_fields": ["date"]
+            },
+            "identity": {
+                "description": "Profile owner identity (name, bio, contact, links)",
+                "primary_key": "id",
+                "categories": ["basic", "links", "contact"],
+                "fields": {
+                    "id": {"type": "string", "format": "uuid", "required": True},
+                    "flavor": {"type": "string", "enum": ["identity"], "required": True},
+                    "category": {"type": "string", "enum": ["basic", "links", "contact"], "nullable": True},
+                    "title": {"type": "string", "required": True},
+                    "raw_data": {"type": "object", "description": "Multi-language structured data (JSON)"},
+                    "created_at": {"type": "string", "format": "date-time", "required": True},
+                    "updated_at": {"type": "string", "format": "date-time", "required": True}
+                }
+            }
+        },
+        "tag_types": {
+            "technology": {
+                "description": "Programming languages, frameworks, tools (e.g., Python, Docker, React)",
+                "fields": {
+                    "tag": {"type": "string", "required": True},
+                    "tag_type": {"type": "string", "enum": ["technology"], "required": True}
+                },
+                "analytics_endpoint": "/technology/{name}",
+                "analytics_fields": {
+                    "proficiency": {
+                        "type": "number",
+                        "range": [0, 100],
+                        "description": "Recency-weighted experience score",
+                        "algorithm": "Weighted by usage recency and duration"
+                    },
+                    "experience_years": {
+                        "type": "number",
+                        "description": "Total years of experience with this technology",
+                        "algorithm": "Sum of stage durations where this tech was tagged"
+                    },
+                    "entity_count": {
+                        "type": "integer",
+                        "description": "Number of entities tagged with this technology"
+                    },
+                    "frequency": {
+                        "type": "number",
+                        "range": [0, 1],
+                        "description": "Occurrence rate across all entities"
+                    },
+                    "last_used": {
+                        "type": "string",
+                        "format": "ISO-8601",
+                        "description": "Date of most recent entity using this technology"
+                    },
+                    "diversity_score": {
+                        "type": "number",
+                        "range": [0, 1],
+                        "description": "Variety of contexts in which this technology appears"
+                    },
+                    "growth_trend": {
+                        "type": "string",
+                        "enum": ["increasing", "stable", "decreasing"],
+                        "description": "Usage trend over time"
+                    },
+                    "relevance_score": {
+                        "type": "number",
+                        "range": [0, 100],
+                        "description": "Composite score combining proficiency, recency, and frequency"
+                    }
+                }
+            },
+            "skill": {
+                "description": "Competencies and expertise areas (e.g., Data Analytics, SEO, Project Management)",
+                "fields": {
+                    "tag": {"type": "string", "required": True},
+                    "tag_type": {"type": "string", "enum": ["skill"], "required": True}
+                },
+                "analytics_endpoint": "/skills/{name}",
+                "analytics_fields": {
+                    "proficiency": {
+                        "type": "number",
+                        "range": [0, 100],
+                        "description": "Recency-weighted experience score"
+                    },
+                    "experience_years": {
+                        "type": "number",
+                        "description": "Total years of experience with this skill"
+                    },
+                    "entity_count": {
+                        "type": "integer",
+                        "description": "Number of entities tagged with this skill"
+                    },
+                    "frequency": {
+                        "type": "number",
+                        "range": [0, 1],
+                        "description": "Occurrence rate across all entities"
+                    },
+                    "last_used": {
+                        "type": "string",
+                        "format": "ISO-8601",
+                        "description": "Date of most recent entity using this skill"
+                    },
+                    "diversity_score": {
+                        "type": "number",
+                        "range": [0, 1],
+                        "description": "Variety of contexts in which this skill appears"
+                    },
+                    "growth_trend": {
+                        "type": "string",
+                        "enum": ["increasing", "stable", "decreasing"],
+                        "description": "Usage trend over time"
+                    },
+                    "relevance_score": {
+                        "type": "number",
+                        "range": [0, 100],
+                        "description": "Composite score combining proficiency, recency, and frequency"
+                    }
+                }
+            },
+            "generic": {
+                "description": "General tags and topics",
+                "fields": {
+                    "tag": {"type": "string", "required": True},
+                    "tag_type": {"type": "string", "enum": ["generic"], "required": True}
+                },
+                "analytics_endpoint": "/tags/{name}"
+            }
+        },
+        "relations": {
+            "description": "Entities are related via shared tags (many-to-many)",
+            "mechanism": "Tags table (entity_id → tag + tag_type)",
+            "query_endpoint": "/graph"
+        },
+        "endpoints": {
+            "discovery_root": "/index",
+            "data_model": "/schema",
+            "coverage_contract": "/coverage",
+            "entity_collections": {
+                "/stages": "List all career and education stages",
+                "/stages/{id}": "Single stage detail",
+                "/oeuvre": "List all work portfolio items",
+                "/oeuvre/{id}": "Single oeuvre item detail",
+                "/skills": "List all skills with analytics",
+                "/skills/{name}": "Entities with specific skill + analytics",
+                "/technology": "List all technologies with analytics",
+                "/technology/{name}": "Entities with specific technology + analytics",
+                "/tags": "List all generic tags",
+                "/tags/{name}": "Entities with specific tag"
+            },
+            "metadata": {
+                "/greeting": "Identity card (multi-language)",
+                "/languages": "Translation coverage",
+                "/categories": "Entity flavor + category counts"
+            }
+        }
+    })
+
+
 @app.get("/coverage", summary="Session coverage report")
 @limiter.limit("200/minute")
-async def coverage_report(request: Request):
+async def coverage_report(request: Request, conn=Depends(db)):
     """
-    Returns detailed coverage report for the current session.
-    Shows which endpoints have been visited and which are missing.
+    Returns machine-readable coverage report for MCP compatibility.
     
-    Use this to understand your exploration progress and identify
-    endpoints you haven't visited yet.
+    Shows which endpoints have been visited and which are missing,
+    with entity-level detail for verifiability.
     
     Response includes:
-      - Overall coverage percentage (weighted by endpoint importance)
-      - List of missing endpoints
-      - List of incomplete endpoints (paginated endpoints with partial coverage)
-      - Detailed breakdown per endpoint with pages visited
+      - coverage: Overall coverage percentage (0-100)
+      - missing: List of unvisited endpoints with reasons
+      - total_entities: Total number of entities in database
+      - fetched_entities: Number of unique entities accessed
+      - session_detail: Extended session information (metadata)
     
     Note: Coverage is based on relevant endpoints that have metrics.
     Not all API endpoints count towards coverage.
     """
     if not session_tracker:
+        # If tracking disabled, return base coverage contract
+        total = conn.execute(
+            "SELECT COUNT(*) FROM entities WHERE visibility='public'"
+        ).fetchone()[0]
+        
         return ok({
-            "enabled": False,
+            "coverage": 0,
+            "missing": [],
+            "total_entities": total,
+            "fetched_entities": 0,
+            "coverage_is_relevant": False,
             "message": "Session tracking is disabled in config.yaml"
         })
     
     client_ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
     
+    # Get detailed coverage from session tracker
     coverage_data = session_tracker.get_coverage(client_ip, user_agent)
-    return ok(coverage_data)
+    
+    # Get total entity counts
+    total_entities = conn.execute(
+        "SELECT COUNT(*) FROM entities WHERE visibility='public'"
+    ).fetchone()[0]
+    
+    # Estimate fetched entities from visited endpoints
+    # This is approximate - we track endpoint visits, not individual entity fetches
+    visited_endpoints = len([
+        item for item in coverage_data.get('breakdown', [])
+        if item.get('visited', False)
+    ])
+    
+    # Build MCP-compliant missing list
+    missing = []
+    if 'missing_endpoints' in coverage_data:
+        for item in coverage_data['missing_endpoints']:
+            missing.append({
+                "endpoint": item['endpoint'],
+                "reason": "not visited yet",
+                "paginated": item.get('paginated', False)
+            })
+    
+    if 'incomplete_endpoints' in coverage_data:
+        for item in coverage_data['incomplete_endpoints']:
+            missing.append({
+                "endpoint": item['endpoint'],
+                "reason": f"partial coverage ({item['coverage_pct']}%) - visit more pages",
+                "pages_visited": item['pages_visited'],
+                "coverage_pct": item['coverage_pct']
+            })
+    
+    # MCP-compliant response
+    response = {
+        "coverage": int(coverage_data.get('coverage', {}).get('percentage', 0)),
+        "missing": missing,
+        "total_entities": total_entities,
+        "fetched_entities": visited_endpoints,  # Approximate
+        "coverage_is_relevant": True,
+        # Extended metadata (not in MCP spec, but useful)
+        "session_detail": {
+            "visitor_id": coverage_data.get('visitor_id'),
+            "session_exists": coverage_data.get('session_exists', False),
+            "session": coverage_data.get('session'),
+            "breakdown": coverage_data.get('breakdown', [])
+        }
+    }
+    
+    return JSONResponse(content=ok(response), media_type="application/json")
 
 
 # ── Language coverage ─────────────────────────────────────────────────────────
