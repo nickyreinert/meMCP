@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mcp-server:
     build: .
@@ -12,7 +10,7 @@ services:
       - ./db:/app/db
       # Persist logs
       - ./logs:/app/logs
-      # Mount data directory (contains your YAML caches and identity files)
+      # Mount data directory
       - ./data:/app/data
       # Mount config file
       - ./config.yaml:/app/config.yaml
