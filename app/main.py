@@ -405,10 +405,14 @@ async def human_endpoint(request: Request):
 
 
 @app.get("/index", summary="MCP discovery root")
+@app.get("/root", summary="Discovery root (alias for /index)", include_in_schema=False)
+@app.get("/discover", summary="Discovery endpoint (alias for /index)", include_in_schema=False)
 @limiter.limit("120/minute")
 async def index_endpoint(request: Request, conn=Depends(db)):
     """
     Deterministic discovery root for MCP (Machine Context Protocol).
+    
+    Available at: /index, /root, /discover (all return the same discovery data)
     
     Returns direct links to all entities across all flavors.
     No hidden entities. No pagination (all entities returned).
@@ -479,10 +483,14 @@ async def health():
 
 
 @app.get("/schema", summary="MCP data model schema")
+@app.get("/openapi.json", summary="OpenAPI schema (alias for /schema)", include_in_schema=False)
+@app.get("/model", summary="Data model (alias for /schema)", include_in_schema=False)
 @limiter.limit("120/minute")
 async def schema(request: Request):
     """
     Machine-discoverable data model for MCP (Machine Context Protocol) compatibility.
+    
+    Available at: /schema, /openapi.json, /model (all return the same schema)
     
     Defines the complete object graph, relations, and analytics fields.
     This endpoint is canonical for understanding the structure of all data returned by this API.
@@ -490,6 +498,89 @@ async def schema(request: Request):
     return ok({
         "version": "1.0",
         "description": "Personal profile entity graph with multi-language support",
+        "scoring_semantics": {
+            "description": "Field definitions for analytics and scoring calculations",
+            "fields": {
+                "proficiency": {
+                    "type": "number",
+                    "range": [0, 100],
+                    "unit": "score",
+                    "description": "Recency-weighted experience level",
+                    "calculation": "Composite of experience_years × recency_weight × frequency_weight",
+                    "usage": "Primary skill/technology mastery indicator"
+                },
+                "experience_years": {
+                    "type": "number",
+                    "unit": "years",
+                    "description": "Total cumulative experience duration",
+                    "calculation": "Sum of all stage durations (end_date - start_date) where tag appears",
+                    "usage": "Raw experience metric without recency adjustment"
+                },
+                "frequency": {
+                    "type": "number",
+                    "range": [0, 1],
+                    "unit": "ratio",
+                    "description": "Relative occurrence rate",
+                    "calculation": "entity_count / total_entities_with_tags",
+                    "usage": "How common this skill/technology is across portfolio"
+                },
+                "recency": {
+                    "type": "number",
+                    "unit": "days",
+                    "description": "Time since last usage",
+                    "calculation": "current_date - last_used (ISO-8601 date field)",
+                    "usage": "Currency indicator; lower = more recent"
+                },
+                "last_used": {
+                    "type": "string",
+                    "format": "ISO-8601",
+                    "description": "Most recent entity date using this tag",
+                    "calculation": "MAX(entity.date or entity.end_date) for all entities with this tag",
+                    "usage": "Source field for recency calculation"
+                },
+                "diversity_score": {
+                    "type": "number",
+                    "range": [0, 1],
+                    "unit": "score",
+                    "description": "Variety of contexts in which tag appears",
+                    "calculation": "Normalized entropy across entity flavors and categories",
+                    "usage": "Breadth indicator; 1.0 = used across many contexts"
+                },
+                "growth_trend": {
+                    "type": "string",
+                    "enum": ["increasing", "stable", "decreasing"],
+                    "description": "Usage trajectory over time",
+                    "calculation": "Linear regression of usage frequency over time windows",
+                    "usage": "Identifies emerging vs declining skills"
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "Whether skill/technology is currently in use",
+                    "calculation": "EXISTS(entity with this tag WHERE is_current=1 OR recency < 365)",
+                    "usage": "Filters for current skillset"
+                },
+                "relevance_score": {
+                    "type": "number",
+                    "range": [0, 100],
+                    "unit": "score",
+                    "description": "Composite relevance ranking",
+                    "calculation": "weighted_sum(proficiency × 0.4, frequency × 0.3, recency_adjusted × 0.3)",
+                    "usage": "Primary sorting metric for skills/technologies"
+                },
+                "entity_count": {
+                    "type": "integer",
+                    "unit": "count",
+                    "description": "Number of entities tagged with this skill/technology",
+                    "calculation": "COUNT(DISTINCT entity_id) WHERE tag = this_tag",
+                    "usage": "Absolute usage metric"
+                }
+            },
+            "reference_date": {
+                "description": "All time-based calculations use current UTC date as reference",
+                "format": "ISO-8601",
+                "source": "datetime.now(timezone.utc)"
+            }
+        },
         "entity_types": {
             "personal": {
                 "description": "Static identity information",
@@ -721,8 +812,8 @@ async def schema(request: Request):
             "query_endpoint": "/graph"
         },
         "endpoints": {
-            "discovery_root": "/index",
-            "data_model": "/schema",
+            "discovery_root": "/index (also: /root, /discover)",
+            "data_model": "/schema (also: /openapi.json, /model)",
             "coverage_contract": "/coverage",
             "entity_collections": {
                 "/stages": "List all career and education stages",
@@ -731,7 +822,7 @@ async def schema(request: Request):
                 "/oeuvre/{id}": "Single oeuvre item detail",
                 "/skills": "List all skills with analytics",
                 "/skills/{name}": "Entities with specific skill + analytics",
-                "/technology": "List all technologies with analytics",
+                "/technology": "List all technologies with analytics (also: /technologies)",
                 "/technology/{name}": "Entities with specific technology + analytics",
                 "/tags": "List all generic tags",
                 "/tags/{name}": "Entities with specific tag"
@@ -1263,6 +1354,7 @@ async def skill_detail(
 # ── Technology ───────────────────────────────────────────────────────────────
 
 @app.get("/technology", summary="All technologies with entity counts and metrics")
+@app.get("/technologies", summary="Technologies list (alias for /technology)", include_in_schema=False)
 @limiter.limit("120/minute")
 async def technologies_list(
     request: Request,
@@ -1276,6 +1368,9 @@ async def technologies_list(
 ):
     """
     Returns every distinct technology tag with entity counts and calculated metrics.
+    
+    Available at: /technology, /technologies (both return the same data)
+    
     Technologies are specific tools, frameworks, and platforms:
     'Adobe Analytics', 'Python', 'Docker', 'FastAPI', etc.
     
