@@ -38,26 +38,33 @@
     <body>
         <h2>Hello dear human being. </h2>
         <p>Put this prompt into your LLM of trust to work with this service:</p>
-        
+    
         <pre>
-Create a report about this person described by this MCP-server {{ base_url }}
-            
-First refer to: {{ base_url }} for a description of the data model and relations. 
 
-Get me stages and oeuvre ("work") from:
-- GET /stages - Career timeline
-- GET /oeuvre - Side projects, articles, apps
+Act as a profile analyst. You have access to an MCP server at {{ base_url }} which provides structured JSON data about a person's career, skills, and projects. Your task is to analyze this data to create a comprehensive profile report.
 
-Summarize "skills", used "technologies" and "tags" from*:
-- GET /skills
-- GET /technologies
-- GET /tags
+1. INITIAL DISCOVERY:
+First, fetch the description of the data model and relations from the root. Then, list all available tools/resources to identify any undocumented endpoints beyond the standard ones.
 
-Each of them is connected to stages and oeuvre items and it comes with metrics like "confidence" and "recency" to help you decide how much weight to put on it. 
+2. DATA RETRIEVAL:
+- Fetch 'stages' (Career timeline) and 'oeuvre' (Side projects/articles).
+- Fetch 'skills', 'technologies', and 'tags'.
+- FOR EACH item in stages/oeuvre: Use the provided IDs to fetch deep-dive details if separate GET endpoints exist (e.g., /stages/{id}).
 
-Analyze the metrics to create a full profile of this person's expertise, interests and career trajectory.
+3. ANALYSIS & WEIGHTING:
+- Map 'skills' and 'technologies' to specific 'stages' or 'oeuvre' items.
+- Weight the expertise: Prioritize items where (Confidence > 0.8) AND (Recency is within the last 2 years). 
+- If a skill has high confidence but low recency, label it as "Legacy Expertise."
 
-Consider the other endpoints to support your deep analysis.
+4. COMPREHENSIVE REPORT:
+Construct a report with these sections:
+- Executive Summary: The "red thread" of this person's career.
+- Primary Stack: Top 5 technologies based on the calculated weight.
+- Project Highlights: A synthesized view of the 'oeuvre' items that demonstrate the highest skill density.
+- Evolution: How the 'tags' have shifted over the timeline.
+
+If any endpoint returns an error or empty set, attempt to find the information by cross-referencing other tags or related items.
+
         </pre>
         
         Language support: Add ?lang=de for German or Accept-Language header

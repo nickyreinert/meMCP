@@ -77,6 +77,11 @@ CREATE INDEX IF NOT EXISTS idx_entities_category ON entities(category);
 CREATE INDEX IF NOT EXISTS idx_entities_source ON entities(source);
 CREATE INDEX IF NOT EXISTS idx_entities_dates ON entities(start_date, end_date);
 
+-- Natural key indexes for duplicate prevention
+CREATE INDEX IF NOT EXISTS idx_entities_source_url ON entities(source, url) WHERE url IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_entities_source_title ON entities(source, flavor, title);
+CREATE INDEX IF NOT EXISTS idx_entities_identity ON entities(flavor, category) WHERE flavor='identity';
+
 -- ── Tags (many-to-many) ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tags (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,7 +180,12 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
     """
     Insert or update an entity. Returns the entity id.
     `data` must have: flavor, title. Everything else is optional.
-    If `id` is provided, updates that entity; otherwise inserts new.
+    
+    Natural Key Strategy (prevents duplicates):
+      - If entity has URL: lookup by (source, url)
+      - If no URL: lookup by (source, flavor, title)
+      - If identity: lookup by (flavor, category)
+      - If id provided: use that id directly
     
     Required fields:
       - flavor: personal|stages|oeuvre|identity
@@ -195,10 +205,44 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
       - skills: list of skill tags
       - llm_enriched, llm_enriched_at, llm_model: LLM tracking
     """
-    eid = data.get("id") or new_id()
+    # Natural key lookup to find existing entity (prevents duplicates)
+    existing = None
+    
+    if data.get("id"):
+        # If ID provided explicitly, use it
+        eid = data["id"]
+        existing = conn.execute("SELECT id, created_at FROM entities WHERE id=?", (eid,)).fetchone()
+    else:
+        # Lookup by natural key
+        source = data.get("source")
+        url = data.get("url")
+        flavor = data["flavor"]
+        title = data["title"]
+        category = data.get("category")
+        
+        if url and source:
+            # Primary natural key: (source, url)
+            existing = conn.execute(
+                "SELECT id, created_at FROM entities WHERE source=? AND url=? AND url IS NOT NULL",
+                (source, url)
+            ).fetchone()
+        elif flavor == "identity" and category:
+            # Identity entities: (flavor, category) is unique
+            existing = conn.execute(
+                "SELECT id, created_at FROM entities WHERE flavor=? AND category=?",
+                (flavor, category)
+            ).fetchone()
+        elif source and title:
+            # Fallback natural key: (source, flavor, title)
+            existing = conn.execute(
+                "SELECT id, created_at FROM entities WHERE source=? AND flavor=? AND title=?",
+                (source, flavor, title)
+            ).fetchone()
+        
+        # Use existing ID or generate new one
+        eid = existing["id"] if existing else new_id()
+    
     ts = now_iso()
-
-    existing = conn.execute("SELECT id, created_at FROM entities WHERE id=?", (eid,)).fetchone()
 
     # Serialize raw_data if it's a dict
     raw_data_value = data.get("raw_data")
