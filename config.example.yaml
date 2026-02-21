@@ -241,7 +241,7 @@ i18n:
 
 metrics:
   enabled: true
-  version: "1.1"  # increment when changing formulas to trigger recalculation
+  version: "1.2"  # increment when changing formulas to trigger recalculation
 
   # Context weights: differentiate "wrote about it" vs "worked with it"
   # Applied as multiplier to proficiency scores based on entity context
@@ -269,6 +269,8 @@ metrics:
     duration_weight: 0.4
     recency_decay_halflife: 3.0
     min_score: 5.0
+    default_oeuvre_duration_years: 0.5  # Assumed duration for oeuvre items without start/end dates
+    duration_score_multiplier: 15.0      # Multiplier to convert years to score (0-100)
 
   # Experience years: total time spent (weighted by intensity)
   experience_years:
@@ -304,3 +306,9 @@ metrics:
     current_bonus: 10
     stale_penalty: 15
     stale_threshold_years: 5
+    recency_decay_halflife: 3.0       # Decay rate for recency score in relevance
+    experience_score_multiplier: 10.0 # Multiplier to convert years to score (0-100)
+    growth_scores:                     # Score values for growth trend categories
+      increasing: 100.0
+      stable: 50.0
+      decreasing: 0.0

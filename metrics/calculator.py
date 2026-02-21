@@ -162,6 +162,8 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
     duration_weight = cfg.get("duration_weight", 0.4)
     decay_halflife = cfg.get("recency_decay_halflife", 3.0)
     min_score = cfg.get("min_score", 5.0)
+    default_duration = cfg.get("default_oeuvre_duration_years", 0.5)
+    duration_multiplier = cfg.get("duration_score_multiplier", 15.0)
     
     # Get context weights (flavor → category → multiplier)
     context_weights = config.get("context_weights", {})
@@ -190,10 +192,10 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
             end = parse_date(entity["end_date"]) if entity.get("end_date") else datetime.now()
             duration_years = years_between(start, end)
         else:
-            # For oeuvre items without duration, assume 0.5 years per project
-            duration_years = 0.5
+            # For oeuvre items without duration, use configured default
+            duration_years = default_duration
         
-        duration_score = min(100.0, duration_years * 15.0)
+        duration_score = min(100.0, duration_years * duration_multiplier)
         
         # Weighted combination (before context)
         base_score = (recency_weight * recency_score + duration_weight * duration_score)
@@ -243,13 +245,15 @@ def calculate_experience_years(entities: list[dict], config: dict) -> float:
                     "duration": duration
                 })
         elif entity.get("date"):
-            # For oeuvre items, count as 0.5 years each
+            # For oeuvre items, use configured default duration
+            cfg = config.get("proficiency", {})
+            default_duration = cfg.get("default_oeuvre_duration_years", 0.5)
             date_parsed = parse_date(entity["date"])
             if date_parsed:
                 time_periods.append({
                     "start": date_parsed,
                     "end": date_parsed,
-                    "duration": 0.5
+                    "duration": default_duration
                 })
     
     # Filter out periods with None start/end dates
@@ -474,6 +478,9 @@ def calculate_relevance(proficiency: float,
     current_bonus = cfg.get("current_bonus", 10)
     stale_penalty = cfg.get("stale_penalty", 15)
     stale_threshold = cfg.get("stale_threshold_years", 5)
+    recency_decay = cfg.get("recency_decay_halflife", 3.0)
+    experience_multiplier = cfg.get("experience_score_multiplier", 10.0)
+    growth_scores_cfg = cfg.get("growth_scores", {"increasing": 100.0, "stable": 50.0, "decreasing": 0.0})
     
     # Normalize weights
     w_prof = weights.get("proficiency", 0.30)
@@ -485,10 +492,10 @@ def calculate_relevance(proficiency: float,
     
     # Recency score
     years_ago = years_since(parse_date(last_used)) if last_used else 999
-    recency_score = 100.0 * math.exp(-years_ago / 3.0)
+    recency_score = 100.0 * math.exp(-years_ago / recency_decay)
     
     # Experience score (capped at 100)
-    experience_score = min(100.0, experience_years * 10.0)
+    experience_score = min(100.0, experience_years * experience_multiplier)
     
     # Frequency score (0-100)
     frequency_score = frequency * 100.0
@@ -497,7 +504,7 @@ def calculate_relevance(proficiency: float,
     diversity_score = diversity * 100.0
     
     # Growth score
-    growth_score = {"increasing": 100.0, "stable": 50.0, "decreasing": 0.0}[growth_trend]
+    growth_score = growth_scores_cfg.get(growth_trend, 50.0)
     
     # Base score (weighted average)
     base_score = (
