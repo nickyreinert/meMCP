@@ -10,68 +10,84 @@
                 font-family: 'Courier New', Courier, monospace;
                 padding: 2rem;
                 font-size: 1rem;
-                max-width: 800px;
+                max-width: 900px;
                 margin: 0 auto;
                 line-height: 1.6;
+                /* Scanline Effect - reines Schwarz als Basis */
+                background-image: linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                                  linear-gradient(90deg, rgba(0, 20, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 20, 0, 0.06));
+                background-size: 100% 4px, 3px 100%;
             }
             
-            a {
-                color: #0f0;
-                text-decoration: none;
+            h2::after {
+                content: '_';
+                animation: blink 1s infinite;
             }
+
+            @keyframes blink {
+                0% { opacity: 0; }
+                50% { opacity: 1; }
+                100% { opacity: 0; }
+            }
+
             pre {
-                background: #111;
-                padding: 1rem;
+                background: #000;
+                padding: 1.5rem;
                 overflow-x: auto;
+                border: 1px solid #0f0;
                 border-radius: 4px;
                 white-space: pre-wrap;
                 word-wrap: break-word;
+                box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+            }
+
+            code { color: #0f0; }
+            
+            center {
+                margin-top: 3rem;
+                text-transform: uppercase;
+                letter-spacing: 2px;
             }
         </style>
     </head>
     <body>
-        <h2>Hello dear human being. </h2>
-        <p>Put this prompt into your LLM of trust to work with this service:</p>
+        <h2>Hello fellow human being.</h2>
+        <p>Inject the following instruction set into your LLM to interface with the MCP server:</p>
     
         <pre>
-Act as a profile analyst. You have access to an MCP server at {{ base_url }}. Your goal is to reach 100% data coverage to create a high-precision report.
+Act as a profile analyst. You have access to an MCP server at {{ base_url }}
 
 1. COVERAGE & DISCOVERY:
 - Monitor HTTP headers: 'X-Coverage-Percentage' and 'X-Coverage-Is-Relevant'.
-- If coverage is &lt; 100%, check https://mcp.nickyreinert.de/coverage to identify missing relevant pages.
-- Fetch the data model and list all tools/resources to find undocumented endpoints.
+- Goal: 100% Coverage. If &lt; 100%, visit https://mcp.nickyreinert.de/coverage to identify missing relevant resources.
+- Fetch the data model first to map relations between stages, oeuvre, and tags.
 
-2. DATA RETRIEVAL:
-- Fetch 'stages' (Career), 'oeuvre' (Projects), 'skills', 'technologies', and 'tags'.
-- Recursively fetch deep-dive details for specific IDs if endpoints like /stages/{id} exist.
+2. RECURSIVE DATA RETRIEVAL:
+- Fetch 'stages', 'oeuvre', 'skills', 'technologies', and 'tags'.
+- For each item, follow ID links to fetch deep-dive details (e.g., /stages/{id}) to ensure no metadata is missed.
 
-3. METRIC COMPUTATION (The Formula):
-For every skill/tag, calculate the 'Relevance Score' using:
+3. ANALYTIC WEIGHTING:
+For every entity, calculate the 'Relevance Score' using the following coefficients:
 Score = (Proficiency * 0.30) + (Frequency * 0.20) + (Recency * 0.20) + (Diversity * 0.15) + (Experience * 0.10) + (Growth * 0.05)
-- Apply 'stale_penalty' (-15) if unused for > 5 years.
-- Apply 'current_bonus' (+10) for active items.
+- Subtract 'stale_penalty' (15) if recency > 5 years.
+- Add 'current_bonus' (10) for items currently marked as active.
 
-4. COMPREHENSIVE REPORT:
-- Executive Summary: The "red thread" of the career trajectory.
-- Expertise Matrix: A Markdown table showing: Skill, Proficiency, Years of Exp, Growth Trend, and Calculated Relevance.
-- Evolution: Analyze how 'tags' and 'diversity' have shifted over the timeline.
-- Visualization Base: Provide a Mermaid.js Quadrant Chart (X: Proficiency, Y: Relevance) to map the profile.
+4. OUTPUT REQUIREMENTS:
+- Executive Summary: A narrative of the person's professional evolution.
+- Expertise Matrix: A Markdown table with columns: [Item, Proficiency, Years_Exp, Growth_Trend, Final_Relevance].
+- Chart Data: Generate a Mermaid.js Quadrant Chart code block. Map 'Proficiency' (X) against 'Relevance' (Y) to visualize core vs. legacy skills.
 
-Ensure 100% coverage before finalizing.
+Maintain 100% coverage before providing the final report.
         </pre>
         
-        Language support: Add ?lang=de for German or Accept-Language header
-        
-        All endpoints return structured JSON.
+        <p>Language support: Append <code>?lang=de</code> or use <code>Accept-Language</code> header.</p>
 
         <h2>Example:</h2>
         <pre>
-curl {{ base_url }}/?lang=de
 curl {{ base_url }}/skills
-curl -H "Accept-Language: de" {{ base_url }}/entities
+curl {{ base_url }}/oeuvre?lang=de
         </pre>
         
         <center><small><i>~ all your base are belong to us ~</i></small></center>
-        
     </body>
 </html>
