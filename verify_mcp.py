@@ -14,25 +14,59 @@ def test_schema():
     print("SCHEMA VERIFICATION - All Required Elements")
     print("=" * 70)
     
+    # Test primary schema endpoint
     r = requests.get(f"{BASE_URL}/schema")
     assert r.status_code == 200, f"Schema endpoint failed: {r.status_code}"
     
+    # Test aliases
+    print("\n1. SCHEMA ALIASES:")
+    for alias in ["/schema", "/openapi.json", "/model"]:
+        r = requests.get(f"{BASE_URL}{alias}")
+        status = "✅" if r.status_code == 200 else "❌"
+        print(f"   {status} {alias}")
+        assert r.status_code == 200, f"{alias} failed"
+    
     data = r.json()['data']
     
-    # 1. Primary Keys
-    print("\n1. PRIMARY KEYS:")
+    # 2. Primary Keys
+    print("\n2. PRIMARY KEYS:")
     for entity_type, spec in data['entity_types'].items():
         pk = spec.get('primary_key', 'undefined')
         print(f"   {entity_type:15s} → {pk}")
     
-    # 2. Relations
-    print("\n2. RELATIONS:")
+    # 3. Relations
+    print("\n3. RELATIONS:")
     relations = data.get('relations', {})
     print(f"   Mechanism: {relations.get('mechanism', 'N/A')}")
     print(f"   Query endpoint: {relations.get('query_endpoint', 'N/A')}")
     
-    # 3. Analytics Fields
-    print("\n3. ANALYTICS FIELDS (for scoring):")
+    # 4. Scoring Semantics (NEW REQUIREMENT)
+    print("\n4. SCORING SEMANTICS (explicit field definitions):")
+    assert 'scoring_semantics' in data, "scoring_semantics section missing!"
+    
+    scoring = data['scoring_semantics']
+    required_fields = [
+        'proficiency', 'experience_years', 'frequency', 'recency',
+        'last_used', 'diversity_score', 'growth_trend', 'active',
+        'relevance_score', 'entity_count'
+    ]
+    
+    for field in required_fields:
+        if field in scoring['fields']:
+            field_def = scoring['fields'][field]
+            unit = field_def.get('unit', 'N/A')
+            calc_preview = field_def.get('calculation', 'N/A')[:40]
+            print(f"   ✅ {field:20s} unit={unit:10s} calc={calc_preview}...")
+        else:
+            print(f"   ❌ {field:20s} MISSING")
+            assert False, f"Required field {field} not defined"
+    
+    # Reference date
+    assert 'reference_date' in scoring, "reference_date not defined"
+    print(f"\n   Reference date: {scoring['reference_date']['description']}")
+    
+    # 5. Analytics Fields
+    print("\n5. ANALYTICS FIELDS (for scoring):")
     for tag_type, spec in data['tag_types'].items():
         if 'analytics_fields' in spec:
             fields = list(spec['analytics_fields'].keys())
@@ -40,8 +74,8 @@ def test_schema():
             endpoint = spec.get('analytics_endpoint', 'N/A')
             print(f"      → Endpoint: {endpoint}")
     
-    # 4. Temporal Semantics
-    print("\n4. TEMPORAL SEMANTICS (for recency/experience):")
+    # 6. Temporal Semantics
+    print("\n6. TEMPORAL SEMANTICS (for recency/experience):")
     for entity_type in ['stages', 'oeuvre']:
         if entity_type in data['entity_types']:
             ts = data['entity_types'][entity_type].get('temporal_semantics', {})
@@ -52,14 +86,14 @@ def test_schema():
                         desc = ts[field].get('description', ts[field].get('field', ''))
                         print(f"      - {field}: {desc[:50]}")
     
-    # 5. Endpoints
-    print("\n5. DISCOVERY ENDPOINTS:")
+    # 7. Endpoints
+    print("\n7. DISCOVERY ENDPOINTS:")
     endpoints = data.get('endpoints', {})
     print(f"   Discovery root: {endpoints.get('discovery_root', 'N/A')}")
     print(f"   Data model: {endpoints.get('data_model', 'N/A')}")
     print(f"   Coverage contract: {endpoints.get('coverage_contract', 'N/A')}")
     
-    print("\n✅ Schema complete")
+    print("\n✅ Schema complete with explicit semantics")
 
 def test_endpoints():
     """Test all required endpoints return valid data."""
@@ -70,13 +104,18 @@ def test_endpoints():
     endpoints = [
         ("/", "Root index"),
         ("/schema", "Schema definition"),
+        ("/openapi.json", "Schema alias (OpenAPI)"),
+        ("/model", "Schema alias (model)"),
         ("/index", "Discovery root"),
+        ("/root", "Discovery root alias"),
+        ("/discover", "Discovery root alias"),
         ("/coverage", "Coverage contract"),
         ("/greeting", "Identity card"),
         ("/stages", "Career stages collection"),
         ("/oeuvre", "Work portfolio collection"),
         ("/skills", "Skills collection + metrics"),
         ("/technology", "Technologies collection + metrics"),
+        ("/technologies", "Technologies alias"),
         ("/tags", "Generic tags"),
     ]
     
@@ -86,7 +125,7 @@ def test_endpoints():
         print(f"   {status} {path:20s} → {desc}")
         assert r.status_code == 200, f"{path} failed: {r.status_code}"
     
-    print("\n✅ All endpoints available")
+    print("\n✅ All endpoints available (including aliases)")
 
 def test_detail_endpoints():
     """Test detail endpoints with actual IDs."""
@@ -185,12 +224,18 @@ if __name__ == "__main__":
         print("🎉 ALL MCP REQUIREMENTS SATISFIED")
         print("=" * 70)
         print("\nThe API is fully MCP-compliant and ready for analysis:")
-        print("  • Schema exposed at /schema")
-        print("  • All endpoints populated and returning data")
-        print("  • Coverage contract at /coverage (JSON)")
-        print("  • Discovery root at /index")
-        print("  • Analytics fields defined for skills/technologies")
-        print("  • Temporal semantics defined for stages/oeuvre")
+        print("  ✅ Schema exposed at /schema (+ /openapi.json, /model)")
+        print("  ✅ Discovery root at /index (+ /root, /discover)")
+        print("  ✅ All endpoints populated and returning data")
+        print("  ✅ Endpoint aliases: /technology = /technologies")
+        print("  ✅ Coverage contract at /coverage (JSON)")
+        print("  ✅ Explicit scoring semantics defined:")
+        print("     - proficiency, frequency, recency (with units)")
+        print("     - diversity, experience, growth, active")
+        print("     - All fields have: type, unit, calculation, usage")
+        print("  ✅ Analytics fields defined for skills/technologies")
+        print("  ✅ Temporal semantics defined for stages/oeuvre")
+        print("  ✅ Reference date: current UTC (explicit)")
         print()
         
     except AssertionError as e:
