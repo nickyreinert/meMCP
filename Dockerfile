@@ -34,5 +34,5 @@ USER mcpuser
 EXPOSE 8000
 
 # Command to run the application using Gunicorn with Uvicorn workers
-# --proxy-headers is crucial because of the Nginx reverse proxy
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# We rely on ProxyHeadersMiddleware in main.py for header handling
+CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--forwarded-allow-ips", "*"]
