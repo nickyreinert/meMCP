@@ -110,9 +110,11 @@ class SitemapScraper(BaseScraper):
         for url_to_scrape in urls_to_process:
             try:
                 item = self._process_page(url_to_scrape, settings)
-                if item:
+                if item and item.get("title") != "Untitled" and item.get("date"):
                     results.append(item)
                     errors = 0  # Reset error counter on success
+                else:
+                    log.debug(f"Skipping incomplete item: {url_to_scrape}")
             except Exception as e:
                 log.error(f"Failed to process {url_to_scrape}: {e}")
                 errors += 1
@@ -210,6 +212,7 @@ class SitemapScraper(BaseScraper):
             "source": self.name,
             "source_url": url,
             "description": description,
+            "date": published_at,
             "published_at": published_at,
             "ext": {
                 "platform": self.name,

@@ -69,6 +69,7 @@ class RSSScraper(BaseScraper):
                 "source": self.name,
                 "source_url": link,
                 "description": desc[:5000] if desc else "", 
+                "date": published_at,
                 "published_at": published_at,
                 "ext": {
                     "platform": self.name,
