@@ -4,11 +4,14 @@ recalculate_metrics.py — Standalone Tag Metrics Recalculation Script
 =====================================================================
 
 Purpose:
-  Recalculate metrics for all tags (skills, technologies, generic tags)
+  Recalculate metrics for ALL tag types (skills, technologies, generic tags)
   without fetching new data. Uses existing entity data in the database.
+  
+  Each tag is categorized by tag_type and metrics are calculated separately
+  for each (tag, tag_type) combination.
 
 Usage:
-  # Recalculate all metrics
+  # Recalculate metrics for ALL tag types (default)
   python recalculate_metrics.py
   
   # Recalculate only specific tag type
@@ -19,21 +22,22 @@ Usage:
   # Force recalculation (ignore metrics version)
   python recalculate_metrics.py --force
   
-  # Verbose output
+  # Verbose output (shows top skills/technologies)
   python recalculate_metrics.py --verbose
 
 Process:
   1. Load metrics configuration from config.yaml
   2. Connect to profile database
-  3. Collect all distinct tags from entities
-  4. Calculate metrics for each tag
+  3. Collect all distinct (tag, tag_type) pairs from entities
+  4. Calculate metrics for each tag (proficiency, frequency, diversity, etc.)
   5. Store results in tag_metrics table
-  6. Display summary statistics
+  6. Display breakdown by tag type and summary statistics
 
 Output:
-  - Number of tags processed
+  - Breakdown by tag type (generic/skill/technology)
+  - Number of tags processed per type
   - Processing time
-  - Top skills/technologies by relevance
+  - Top skills/technologies by relevance (with --verbose)
 """
 
 import argparse
@@ -164,8 +168,34 @@ def recalculate(tag_type: str = None,
     # Start calculation
     start_time = time.time()
     
-    tag_type_str = tag_type or "all tags"
+    # Get breakdown of tags to process
+    sql = """
+        SELECT tag_type, COUNT(*) as count
+        FROM (
+            SELECT DISTINCT t.tag, t.tag_type
+            FROM tags t
+            JOIN entities e ON e.id = t.entity_id
+            WHERE e.visibility = 'public'
+    """
+    params = []
+    if tag_type:
+        sql += " AND t.tag_type = ?"
+        params.append(tag_type)
+    sql += """
+        )
+        GROUP BY tag_type
+        ORDER BY tag_type
+    """
+    
+    breakdown = conn.execute(sql, params).fetchall()
+    
+    # Display what's being processed
+    total_count = sum(row['count'] for row in breakdown)
+    tag_type_str = tag_type or "all tag types"
     log_message(f"Calculating metrics for {tag_type_str}...", "INFO")
+    for row in breakdown:
+        log_message(f"  {row['tag_type']}: {row['count']} tags", "INFO")
+    log_message(f"  Total: {total_count} tags", "INFO")
     
     try:
         count = calculate_all_metrics(conn, tag_type=tag_type)
