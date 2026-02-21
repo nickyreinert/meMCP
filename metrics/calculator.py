@@ -181,8 +181,6 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
             relevant_date = parse_date(entity["date"])
         elif entity.get("published_at"):
             relevant_date = parse_date(entity["published_at"])
-        else:
-            relevant_date = parse_date(entity.get("updated_at"))
         
         # Recency score (exponential decay)
         years_ago = years_since(relevant_date)
@@ -311,7 +309,7 @@ def calculate_last_used(entities: list[dict]) -> Optional[str]:
     dates = []
     for entity in entities:
         # Check all possible date fields
-        for field in ["end_date", "start_date", "date", "published_at", "updated_at"]:
+        for field in ["end_date", "start_date", "date", "published_at"]:
             if entity.get(field):
                 dt = parse_date(entity[field])
                 if dt:
