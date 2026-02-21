@@ -159,6 +159,14 @@ class SitemapScraper(BaseScraper):
 
         soup = BeautifulSoup(html, "html.parser")
 
+        # Extract canonical URL
+        canonical_url = None
+        canonical_tag = soup.find('link', {'rel': 'canonical'})
+        if canonical_tag and canonical_tag.get('href'):
+            canonical_url = canonical_tag['href']
+            if canonical_url != url:
+                log.debug(f"Found canonical URL: {canonical_url}")
+
         # Extract fields using configured selectors
         title_sel = settings.get("post-title-selector", "title")
         content_sel = settings.get("post-content-selector", "body")
@@ -198,6 +206,7 @@ class SitemapScraper(BaseScraper):
             "category": self.config.get("sub_type_override", "article"),
             "title": title,
             "url": url,
+            "canonical_url": canonical_url if canonical_url and canonical_url != url else None,
             "source": self.name,
             "source_url": url,
             "description": description,

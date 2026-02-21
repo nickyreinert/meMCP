@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS entities (
     title           TEXT NOT NULL,
     description     TEXT,                   -- LLM-enriched or manual
     url             TEXT,
+    canonical_url   TEXT,                   -- Canonical URL for cross-posted content (from <link rel="canonical">)
     source          TEXT,                   -- github|medium|blog|linkedin|manual|identity (config slug)
     source_url      TEXT,                   -- raw URL this was scraped from
     start_date      TEXT,                   -- ISO-8601 date or partial (2020-01) - for stages
@@ -79,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_entities_dates ON entities(start_date, end_date);
 
 -- Natural key indexes for duplicate prevention
 CREATE INDEX IF NOT EXISTS idx_entities_source_url ON entities(source, url) WHERE url IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_url) WHERE canonical_url IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entities_source_title ON entities(source, flavor, title);
 CREATE INDEX IF NOT EXISTS idx_entities_identity ON entities(flavor, category) WHERE flavor='identity';
 
@@ -183,6 +185,7 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
     
     Natural Key Strategy (prevents duplicates):
       - If entity has URL: lookup by (source, url)
+      - If canonical_url set: check if any entity has this as url or canonical_url
       - If no URL: lookup by (source, flavor, title)
       - If identity: lookup by (flavor, category)
       - If id provided: use that id directly
@@ -195,6 +198,7 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
       - category: For stages (education|job), for oeuvre (coding|blog_post|article|book|website), for identity (basic|links|contact)
       - description: LLM-enriched or manual
       - url: entity URL
+      - canonical_url: canonical URL for cross-posted content
       - source: config slug (github|medium|linkedin|manual|identity)
       - source_url: raw scrape URL
       - start_date, end_date: for stages
@@ -216,24 +220,44 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
         # Lookup by natural key
         source = data.get("source")
         url = data.get("url")
+        canonical_url = data.get("canonical_url")
         flavor = data["flavor"]
         title = data["title"]
         category = data.get("category")
         
-        if url and source:
-            # Primary natural key: (source, url)
+        # 1. Check canonical URL matching (cross-posted content)
+        if canonical_url:
+            # Check if canonical matches any existing url or canonical_url
+            existing = conn.execute(
+                """SELECT id, created_at FROM entities 
+                   WHERE (url=? OR canonical_url=?) AND url IS NOT NULL
+                   LIMIT 1""",
+                (canonical_url, canonical_url)
+            ).fetchone()
+        
+        # 2. Check if this URL is someone else's canonical
+        if not existing and url:
+            existing = conn.execute(
+                "SELECT id, created_at FROM entities WHERE canonical_url=? LIMIT 1",
+                (url,)
+            ).fetchone()
+        
+        # 3. Check by (source, url)
+        if not existing and url and source:
             existing = conn.execute(
                 "SELECT id, created_at FROM entities WHERE source=? AND url=? AND url IS NOT NULL",
                 (source, url)
             ).fetchone()
-        elif flavor == "identity" and category:
-            # Identity entities: (flavor, category) is unique
+        
+        # 4. Identity entities: (flavor, category) is unique
+        if not existing and flavor == "identity" and category:
             existing = conn.execute(
                 "SELECT id, created_at FROM entities WHERE flavor=? AND category=?",
                 (flavor, category)
             ).fetchone()
-        elif source and title:
-            # Fallback natural key: (source, flavor, title)
+        
+        # 5. Fallback: (source, flavor, title)
+        if not existing and source and title:
             existing = conn.execute(
                 "SELECT id, created_at FROM entities WHERE source=? AND flavor=? AND title=?",
                 (source, flavor, title)
@@ -256,6 +280,7 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
         "title":           data["title"],
         "description":     data.get("description"),
         "url":             data.get("url"),
+        "canonical_url":   data.get("canonical_url"),
         "source":          data.get("source"),
         "source_url":      data.get("source_url"),
         "start_date":      data.get("start_date"),
@@ -275,7 +300,7 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
     if existing:
         conn.execute("""
             UPDATE entities SET flavor=:flavor, category=:category, title=:title,
-            description=:description, url=:url, source=:source,
+            description=:description, url=:url, canonical_url=:canonical_url, source=:source,
             source_url=:source_url, start_date=:start_date, end_date=:end_date,
             date=:date, is_current=:is_current, language=:language,
             visibility=:visibility, raw_data=:raw_data, updated_at=:updated_at,
@@ -284,10 +309,10 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
         """, base)
     else:
         conn.execute("""
-            INSERT INTO entities (id,flavor,category,title,description,url,source,
+            INSERT INTO entities (id,flavor,category,title,description,url,canonical_url,source,
             source_url,start_date,end_date,date,is_current,language,visibility,
             raw_data,created_at,updated_at,llm_enriched,llm_enriched_at,llm_model)
-            VALUES (:id,:flavor,:category,:title,:description,:url,:source,
+            VALUES (:id,:flavor,:category,:title,:description,:url,:canonical_url,:source,
             :source_url,:start_date,:end_date,:date,:is_current,:language,:visibility,
             :raw_data,:created_at,:updated_at,:llm_enriched,:llm_enriched_at,:llm_model)
         """, base)

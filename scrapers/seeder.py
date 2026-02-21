@@ -237,6 +237,7 @@ class Seeder:
             "title":           title,
             "description":     item.get("description"),
             "url":             item.get("url"),
+            "canonical_url":   item.get("canonical_url"),
             "source":          source,
             "source_url":      item.get("source_url"),
             "start_date":      item.get("start_date"),

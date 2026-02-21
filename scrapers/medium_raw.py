@@ -184,6 +184,7 @@ class MediumRawScraper(BaseScraper):
                 "sub_type": self.config.get("sub_type_override", "article"),
                 "title": article.get("title", "Untitled"),
                 "url": article.get("url", ""),
+                "canonical_url": article.get("canonical_url"),
                 "source": self.name,
                 "source_url": article.get("url", ""),
                 "description": article.get("description", ""),
@@ -226,6 +227,7 @@ class MediumRawScraper(BaseScraper):
             yaml_article = {
                 "title": article.get("title"),
                 "url": article.get("url"),
+                "canonical_url": article.get("canonical_url"),
                 "published_at": article.get("published_at"),
                 "published_date_text": article.get("ext", {}).get("published_date_text"),
                 "description": article.get("description", ""),
@@ -346,12 +348,15 @@ class MediumRawScraper(BaseScraper):
             
             # Fetch article content if enabled
             description = ""
+            canonical_url = None
             fetch_content = self.config.get("fetch_content", True)  # Default: true (uses headless browser)
             if fetch_content:
                 log.info(f"      → Fetching content from: {article_url}")
-                description = self._fetch_article_content(article_url)
+                description, canonical_url = self._fetch_article_content(article_url)
                 if description:
                     log.info(f"      ✓ Retrieved {len(description)} chars")
+                    if canonical_url and canonical_url != article_url:
+                        log.info(f"      ✓ Found canonical: {canonical_url}")
                 else:
                     log.warning(f"      ✗ Failed to fetch content")
                 # Rate limiting to avoid overwhelming Medium's servers
@@ -364,6 +369,7 @@ class MediumRawScraper(BaseScraper):
                 "sub_type": self.config.get("sub_type_override", "article"),
                 "title": title or "Untitled",
                 "url": article_url,
+                "canonical_url": canonical_url if canonical_url and canonical_url != article_url else None,
                 "source": self.name,
                 "source_url": article_url,
                 "description": description,
@@ -381,20 +387,20 @@ class MediumRawScraper(BaseScraper):
         log.info(f"Extracted {len(articles)} articles from Medium HTML dump")
         return articles
     
-    def _fetch_article_content(self, url: str) -> str:
+    def _fetch_article_content(self, url: str) -> tuple[str, str]:
         """
-        Fetch article content from Medium URL using headless browser.
+        Fetch article content and canonical URL from Medium using headless browser.
         This bypasses Medium's Cloudflare protection.
         
         Args:
             url: Article URL
         
         Returns:
-            Article content text (or empty string if failed)
+            Tuple of (content_text, canonical_url)
         """
         if not PLAYWRIGHT_AVAILABLE:
             log.warning("Playwright not available - cannot fetch article content. Install with: pip install playwright && playwright install")
-            return ""
+            return "", None
         
         try:
             with sync_playwright() as p:
@@ -419,6 +425,13 @@ class MediumRawScraper(BaseScraper):
                 # Parse with BeautifulSoup
                 soup = BeautifulSoup(html, 'html.parser')
                 
+                # Extract canonical URL
+                canonical_url = None
+                canonical_tag = soup.find('link', {'rel': 'canonical'})
+                if canonical_tag and canonical_tag.get('href'):
+                    canonical_url = canonical_tag['href']
+                    log.debug(f"Found canonical URL: {canonical_url}")
+                
                 # Medium article content is typically in <article> tag
                 article_tag = soup.find('article')
                 if article_tag:
@@ -438,7 +451,7 @@ class MediumRawScraper(BaseScraper):
                         content = content[:max_chars] + "\n\n[Content truncated...]"
                     
                     log.debug(f"Extracted {len(content)} chars from article")
-                    return content
+                    return content, canonical_url
                 
                 # Fallback: try to find main content div
                 main_content = soup.find('div', class_=re.compile(r'article|post-content|entry-content'))
@@ -446,14 +459,14 @@ class MediumRawScraper(BaseScraper):
                     text = main_content.get_text(strip=True)
                     if len(text) > 15000:
                         text = text[:15000] + "\n\n[Content truncated...]"
-                    return text
+                    return text, canonical_url
                 
                 log.debug(f"Could not extract content structure from {url}")
-                return ""
+                return "", canonical_url
                 
         except Exception as e:
             log.warning(f"Failed to fetch article content from {url}: {e}")
-            return ""
+            return "", None
     
     def _extract_title_from_url(self, url: str) -> str:
         """
