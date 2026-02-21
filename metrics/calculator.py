@@ -179,6 +179,8 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
             relevant_date = parse_date(entity["start_date"])
         elif entity.get("date"):
             relevant_date = parse_date(entity["date"])
+        elif entity.get("published_at"):
+            relevant_date = parse_date(entity["published_at"])
         else:
             relevant_date = parse_date(entity.get("updated_at"))
         
@@ -309,7 +311,7 @@ def calculate_last_used(entities: list[dict]) -> Optional[str]:
     dates = []
     for entity in entities:
         # Check all possible date fields
-        for field in ["end_date", "start_date", "date", "updated_at"]:
+        for field in ["end_date", "start_date", "date", "published_at", "updated_at"]:
             if entity.get(field):
                 dt = parse_date(entity[field])
                 if dt:
@@ -380,6 +382,8 @@ def calculate_growth_trend(entities: list[dict], config: dict) -> str:
         date = None
         if entity.get("date"):
             date = parse_date(entity["date"])
+        elif entity.get("published_at"):
+            date = parse_date(entity["published_at"])
         elif entity.get("start_date"):
             date = parse_date(entity["start_date"])
         elif entity.get("end_date"):

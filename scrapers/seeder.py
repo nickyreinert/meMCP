@@ -242,7 +242,7 @@ class Seeder:
             "source_url":      item.get("source_url"),
             "start_date":      item.get("start_date"),
             "end_date":        item.get("end_date"),
-            "date":            item.get("date"),
+            "date":            item.get("date") or item.get("published_at"),
             "is_current":      item.get("is_current", 0),
             "language":        item.get("language", "en"),
             "visibility":      item.get("visibility", "public"),
