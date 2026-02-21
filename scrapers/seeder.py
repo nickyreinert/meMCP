@@ -101,13 +101,20 @@ class Seeder:
         entity_mappings = []  # Track (entity, entity_id) for YAML sync
         entity_id_map = {}  # Return mapping of keys to entity_ids
         
+        total_items = len(raw_items)
+        log.info(f"Seeding {total_items} entities to database")
+        
         try:
             # NOTE: Owner/personal entity removed - now handled by identity scraper
             # Identity data is loaded from identity.yaml via identity scraper
             # Run: python ingest.py --source identity
 
             # Process all entities
-            for item in raw_items:
+            for idx, item in enumerate(raw_items, 1):
+                title = item.get("title", "Untitled")[:60]
+                source = item.get("source", "unknown")
+                log.info(f"  [{idx}/{total_items}] Seeding: {title} (source: {source})")
+                
                 entity_id = self._seed_entity(conn, item, enrich_llm=enrich_llm)
                 if entity_id:
                     # Track for return value and YAML sync
@@ -248,7 +255,8 @@ class Seeder:
         }
 
         eid = upsert_entity(conn, entity)
-        log.debug(f"  {flavor}/{item.get('category', 'N/A')}: {title} ({eid[:8]})")
+        llm_status = "✓ LLM enriched" if llm_enriched else "⊙ No LLM"
+        log.info(f"      → Saved to DB: {eid[:8]}... ({llm_status})")
         return eid
 
     # --- LLM POST-PROCESSING ---

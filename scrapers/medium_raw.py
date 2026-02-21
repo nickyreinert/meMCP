@@ -281,6 +281,10 @@ class MediumRawScraper(BaseScraper):
         # Track seen URLs to avoid duplicates
         seen_urls = set()
         
+        # Calculate total for progress reporting
+        total_links = len(article_links)
+        log.info(f"Found {total_links} potential article links in HTML")
+        
         for link in article_links:
             if limit and count >= limit:
                 break
@@ -337,16 +341,19 @@ class MediumRawScraper(BaseScraper):
                 else:
                     title = link.get_text(strip=True) or self._extract_title_from_url(href)
             
+            # Log progress for this entity
+            log.info(f"  [{count + 1}/{limit if limit else total_links}] Processing: {title or 'Untitled'}")
+            
             # Fetch article content if enabled
             description = ""
             fetch_content = self.config.get("fetch_content", True)  # Default: true (uses headless browser)
             if fetch_content:
-                log.debug(f"Fetching content for: {article_url}")
+                log.info(f"      → Fetching content from: {article_url}")
                 description = self._fetch_article_content(article_url)
                 if description:
-                    log.debug(f"  Retrieved {len(description)} chars")
+                    log.info(f"      ✓ Retrieved {len(description)} chars")
                 else:
-                    log.warning(f"  Failed to fetch content for {article_url}")
+                    log.warning(f"      ✗ Failed to fetch content")
                 # Rate limiting to avoid overwhelming Medium's servers
                 time.sleep(2)
             
@@ -370,7 +377,6 @@ class MediumRawScraper(BaseScraper):
             
             articles.append(article)
             count += 1
-            log.debug(f"Extracted article: {title} ({article_url})")
         
         log.info(f"Extracted {len(articles)} articles from Medium HTML dump")
         return articles

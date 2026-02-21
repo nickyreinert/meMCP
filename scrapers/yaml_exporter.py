@@ -17,9 +17,9 @@ Usage:
 
 import logging
 import sqlite3
-import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from scrapers.yaml_sync import save_yaml_atomic
 
 log = logging.getLogger("mcp.yaml_exporter")
 
@@ -70,17 +70,9 @@ def export_to_yaml(
         # Group by flavor/category
         grouped = _group_entities(conn, rows)
         
-        # Write YAML
+        # Write YAML with atomic write
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            yaml.dump(
-                grouped,
-                f,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False,
-                width=120
-            )
+        save_yaml_atomic(output_path, grouped, source or "export")
         
         log.info(f"Exported {len(rows)} entities to {output_path}")
         return len(rows)

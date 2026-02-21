@@ -10,6 +10,7 @@
                 color: #0f0;
                 font-family: 'Courier New', Courier, monospace;
                 padding: 2rem;
+                font-size: 1rem;
                 max-width: 800px;
                 margin: 0 auto;
                 line-height: 1.6;
@@ -39,20 +40,22 @@
         <p>Put this prompt into your LLM of trust to work with this service:</p>
         
         <pre>
-Who is this guy behind {{ base_url }}
+Create a report about this person described by this MCP-server {{ base_url }}
             
-Starting point: {{ base_url }}/docs
+First refer to: {{ base_url }} for a description of the data model and relations. 
 
-Get me stages and oeuvre from:
+Get me stages and oeuvre ("work") from:
 - GET /stages - Career timeline
-- GET /oeuvre - Side projects and articles
+- GET /oeuvre - Side projects, articles, apps
 
-Then summarize skills, used technologies and tags from*:
+Summarize "skills", used "technologies" and "tags" from*:
 - GET /skills
 - GET /technologies
 - GET /tags
 
-Dont forget to analyze metrics provided with each of them to paint a more complete picture of that person!
+Each of them is connected to stages and oeuvre items and it comes with metrics like "confidence" and "recency" to help you decide how much weight to put on it. 
+
+Analyze the metrics to create a full profile of this person's expertise, interests and career trajectory.
 
         </pre>
         
@@ -62,7 +65,7 @@ Dont forget to analyze metrics provided with each of them to paint a more comple
 
         <h2>Example:</h2>
         <pre>
-            curl {{ base_url }}/greeting?lang=de
+            curl {{ base_url }}/?lang=de
             curl {{ base_url }}/skills
             curl -H "Accept-Language: de" {{ base_url }}/entities
         </pre>
