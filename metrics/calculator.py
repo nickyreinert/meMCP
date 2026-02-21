@@ -293,6 +293,9 @@ def calculate_last_used(entities: list[dict]) -> Optional[str]:
             if entity.get(field):
                 dt = parse_date(entity[field])
                 if dt:
+                    # Ensure timezone-naive for comparison
+                    if dt.tzinfo:
+                        dt = dt.replace(tzinfo=None)
                     dates.append(dt)
     
     if not dates:
