@@ -241,7 +241,27 @@ i18n:
 
 metrics:
   enabled: true
-  version: "1.0"  # increment when changing formulas to trigger recalculation
+  version: "1.1"  # increment when changing formulas to trigger recalculation
+
+  # Context weights: differentiate "wrote about it" vs "worked with it"
+  # Applied as multiplier to proficiency scores based on entity context
+  context_weights:
+    default_weight: 0.5     # Fallback weight for uncategorized entities
+    stages:
+      job: 1.0              # Actual work experience (full weight)
+      education: 0.85       # Formal learning (strong weight)
+      achievement: 0.7      # Certification/achievement (good weight)
+      other: 0.8
+    oeuvre:
+      coding: 1.0           # Built something with it (full weight)
+      talk: 0.6             # Presented on it (medium weight)
+      article: 0.3          # Wrote article about it (low weight)
+      blog_post: 0.3        # Wrote blog post about it (low weight)
+      book: 0.7             # Wrote book about it (good weight)
+      podcast: 0.5          # Discussed it (medium-low weight)
+      video: 0.5            # Made video about it (medium-low weight)
+      website: 0.6          # Website project (medium weight)
+      other: 0.5
 
   # Proficiency: measures expertise level (0-100) based on recency and duration
   proficiency:

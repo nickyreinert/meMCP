@@ -143,12 +143,16 @@ def get_total_entity_count(conn: sqlite3.Connection) -> int:
 
 def calculate_proficiency(entities: list[dict], config: dict) -> float:
     """
-    Calculate proficiency score (0-100) based on recency and duration.
+    Calculate proficiency score (0-100) based on recency, duration, and context.
+    
+    Context-aware: Differentiates between "worked with it" vs "wrote about it"
+    by applying context weights based on entity flavor and category.
     
     Formula:
-      proficiency = weighted_avg(recency_scores, duration_scores)
+      proficiency = weighted_avg(context_weighted_scores)
+      entity_score = context_weight * (recency_score * rw + duration_score * dw)
       recency_score = 100 * exp(-years_since / decay_halflife)
-      duration_score = min(100, years_of_use * 10)
+      duration_score = min(100, years_of_use * 15)
     """
     if not entities:
         return 0.0
@@ -158,6 +162,9 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
     duration_weight = cfg.get("duration_weight", 0.4)
     decay_halflife = cfg.get("recency_decay_halflife", 3.0)
     min_score = cfg.get("min_score", 5.0)
+    
+    # Get context weights (flavor → category → multiplier)
+    context_weights = config.get("context_weights", {})
     
     scores = []
     
@@ -188,11 +195,20 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
         
         duration_score = min(100.0, duration_years * 15.0)
         
-        # Weighted combination
-        combined = (recency_weight * recency_score + duration_weight * duration_score)
-        scores.append(max(min_score, combined))
+        # Weighted combination (before context)
+        base_score = (recency_weight * recency_score + duration_weight * duration_score)
+        
+        # Apply context weight based on flavor and category
+        flavor = entity.get("flavor", "oeuvre")
+        category = entity.get("category", "other")
+        default_weight = context_weights.get("default_weight", 0.5)
+        context_weight = context_weights.get(flavor, {}).get(category, default_weight)
+        
+        # Context-weighted score
+        weighted_score = context_weight * base_score
+        scores.append(max(min_score, weighted_score))
     
-    # Average all entity scores
+    # Simple average of context-weighted scores
     return sum(scores) / len(scores) if scores else 0.0
 
 
