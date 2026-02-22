@@ -173,7 +173,11 @@ def calculate_proficiency(entities: list[dict], config: dict) -> float:
     for entity in entities:
         # Determine relevant date (most recent)
         relevant_date = None
-        if entity.get("end_date"):
+        
+        # For current positions/stages, use today's date
+        if entity.get("is_current"):
+            relevant_date = datetime.now()
+        elif entity.get("end_date"):
             relevant_date = parse_date(entity["end_date"])
         elif entity.get("start_date"):
             relevant_date = parse_date(entity["start_date"])
@@ -308,15 +312,22 @@ def calculate_last_used(entities: list[dict]) -> Optional[str]:
     
     dates = []
     for entity in entities:
-        # Check all possible date fields
-        for field in ["end_date", "start_date", "date", "published_at"]:
-            if entity.get(field):
-                dt = parse_date(entity[field])
-                if dt:
-                    # Ensure timezone-naive for comparison
-                    if dt.tzinfo:
-                        dt = dt.replace(tzinfo=None)
-                    dates.append(dt)
+        # For current positions/stages, use today's date
+        if entity.get("is_current"):
+            dt = datetime.now()
+            if dt.tzinfo:
+                dt = dt.replace(tzinfo=None)
+            dates.append(dt)
+        else:
+            # Check all possible date fields
+            for field in ["end_date", "start_date", "date", "published_at"]:
+                if entity.get(field):
+                    dt = parse_date(entity[field])
+                    if dt:
+                        # Ensure timezone-naive for comparison
+                        if dt.tzinfo:
+                            dt = dt.replace(tzinfo=None)
+                        dates.append(dt)
     
     if not dates:
         return None
