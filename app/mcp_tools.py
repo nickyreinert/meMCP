@@ -15,6 +15,8 @@ Tool catalog:
   - query_stages: Query career history (education, jobs)
   - query_portfolio: Query creative work (repos, articles, books)
   - get_technology_metrics: Get proficiency metrics for a technology
+  - query_skills: List all skills with metrics
+  - search_entities: Full-text search across all entities
 
 Dependencies:
   - db/models.py: Database query functions
@@ -27,6 +29,8 @@ from db.models import (
     query_oeuvre,
     query_technology_detail,
     get_tag_metrics,
+    query_skills_with_metrics,
+    list_entities,
 )
 
 
@@ -36,7 +40,7 @@ TOOL_REGISTRY = [
     {
         "name": "query_stages",
         "description": "Query career stages (education and job history). Returns chronological list of education and work experience. Use category to filter by type (education/job), or search_term to filter by title, description, or technology tags.",
-        "input_schema": {
+        "inputSchema": {
             "type": "object",
             "properties": {
                 "category": {
@@ -55,7 +59,7 @@ TOOL_REGISTRY = [
     {
         "name": "query_portfolio",
         "description": "Query portfolio items (creative work and projects). Returns list of coding projects, articles, books, talks, and other published work. Use flavor to filter by type, or tag to find items with specific technologies/topics.",
-        "input_schema": {
+        "inputSchema": {
             "type": "object",
             "properties": {
                 "flavor": {
@@ -74,7 +78,7 @@ TOOL_REGISTRY = [
     {
         "name": "get_technology_metrics",
         "description": "Get detailed proficiency metrics for a specific technology or skill. Returns experience years, proficiency score (0-100), usage frequency, recency, diversity score, and growth trend. Useful for understanding depth of expertise.",
-        "input_schema": {
+        "inputSchema": {
             "type": "object",
             "properties": {
                 "tech_name": {
@@ -83,6 +87,55 @@ TOOL_REGISTRY = [
                 }
             },
             "required": ["tech_name"]
+        }
+    },
+    {
+        "name": "query_skills",
+        "description": "Query all skills with proficiency metrics and entity counts. Optionally filter by minimum proficiency threshold. Returns list of skills sorted by relevance score, including proficiency, experience years, and usage statistics.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "min_proficiency": {
+                    "type": "number",
+                    "description": "Minimum proficiency score (0-100). Only returns skills with proficiency >= this value. Omit to get all skills.",
+                    "minimum": 0,
+                    "maximum": 100
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Defaults to 50.",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 50
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "search_entities",
+        "description": "Full-text search across all entities (career stages, portfolio items, technologies). Searches in titles, descriptions, and tags. Returns ranked results with relevance scoring.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query string. Searches across entity titles, descriptions, and associated tags. Case-insensitive."
+                },
+                "flavor": {
+                    "type": "string",
+                    "enum": ["stages", "oeuvre", "personal", "identity"],
+                    "description": "Optional filter by entity flavor: 'stages' for career history, 'oeuvre' for portfolio items. Omit to search all."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Defaults to 20.",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20
+                }
+            },
+            "required": ["query"]
         }
     }
 ]
@@ -271,6 +324,106 @@ def execute_tool(conn: sqlite3.Connection, tool_name: str, arguments: dict) -> d
                 "metrics": metrics,
                 "entity_count": tech_detail.get("entity_count", 0),
                 "by_flavor": tech_detail.get("by_flavor", {})
+            }
+        }
+    
+    # --- QUERY SKILLS ---
+    elif tool_name == "query_skills":
+        min_proficiency = arguments.get("min_proficiency")
+        limit = arguments.get("limit", 50)
+        
+        # Validate min_proficiency if provided
+        if min_proficiency is not None:
+            if not isinstance(min_proficiency, (int, float)) or min_proficiency < 0 or min_proficiency > 100:
+                raise ValueError("min_proficiency must be a number between 0 and 100")
+        
+        # Validate limit
+        if not isinstance(limit, int) or limit < 1 or limit > 200:
+            raise ValueError("limit must be an integer between 1 and 200")
+        
+        # Query skills with metrics
+        all_skills = query_skills_with_metrics(
+            conn,
+            order_by="relevance_score",
+            limit=limit
+        )
+        
+        # Filter by min_proficiency if provided
+        if min_proficiency is not None:
+            skills = [
+                s for s in all_skills 
+                if s.get("proficiency") and float(s["proficiency"]) >= min_proficiency
+            ]
+        else:
+            skills = all_skills
+        
+        return {
+            "status": "success",
+            "data": {
+                "skills": skills,
+                "count": len(skills),
+                "filters": {
+                    "min_proficiency": min_proficiency,
+                    "limit": limit
+                }
+            }
+        }
+    
+    # --- SEARCH ENTITIES ---
+    elif tool_name == "search_entities":
+        query = arguments.get("query")
+        flavor = arguments.get("flavor")
+        limit = arguments.get("limit", 20)
+        
+        # Validate required fields
+        if not query:
+            raise ValueError("query is required")
+        
+        # Validate flavor if provided
+        if flavor and flavor not in ["stages", "oeuvre", "personal", "identity"]:
+            raise ValueError(f"Invalid flavor '{flavor}'. Must be one of: stages, oeuvre, personal, identity.")
+        
+        # Validate limit
+        if not isinstance(limit, int) or limit < 1 or limit > 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        
+        # Execute search query
+        # Use SQL LIKE for basic full-text search
+        search_pattern = f"%{query}%"
+        sql = """
+            SELECT DISTINCT e.* FROM entities e
+            LEFT JOIN tags t ON t.entity_id = e.id
+            WHERE e.visibility = 'public'
+            AND (
+                e.title LIKE ? 
+                OR e.description LIKE ?
+                OR t.tag LIKE ?
+            )
+        """
+        params = [search_pattern, search_pattern, search_pattern]
+        
+        if flavor:
+            sql += " AND e.flavor = ?"
+            params.append(flavor)
+        
+        sql += f" ORDER BY e.updated_at DESC LIMIT {limit}"
+        
+        rows = conn.execute(sql, params).fetchall()
+        
+        # Hydrate results using _hydrate helper (import needed)
+        from db.models import _hydrate
+        results = [_hydrate(conn, dict(r)) for r in rows]
+        
+        return {
+            "status": "success",
+            "data": {
+                "results": results,
+                "count": len(results),
+                "query": query,
+                "filters": {
+                    "flavor": flavor,
+                    "limit": limit
+                }
             }
         }
     
