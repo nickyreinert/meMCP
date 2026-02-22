@@ -1,5 +1,40 @@
 # UNFINISHED TASKS
 
+## 2026-02-22 - MCP Prompts Primitive Support
+
+**Status**: Complete
+
+**What's Done**:
+- ✅ Created prompts.yaml configuration file with 6 seed prompt templates
+- ✅ Added load_prompts() helper function in app/main.py
+- ✅ Implemented GET /prompts endpoint (returns list of prompts with summaries)
+- ✅ Implemented GET /prompts/{prompt_id} endpoint (returns full prompt template)
+- ✅ Updated API index (/) to include prompts in MCP section and routes
+- ✅ Updated main.py docstring with new routes
+- ✅ Tested all endpoints successfully
+
+**Architecture**:
+- prompts.yaml stores reusable prompt templates with schema: id, name, description, use_case, prompt_template
+- Two RESTful endpoints for discovery and retrieval
+- Follows existing codebase patterns (no Pydantic models, dict responses, ok() wrapper)
+- Integrated into FastAPI OpenAPI/Swagger documentation
+
+**Seed Prompts**:
+1. build-resume - Generate chronological resume
+2. build-cover-letter - Write job-specific cover letter
+3. visualize-knowledge - Create skill/tech charts
+4. analyze-career-growth - Analyze career progression
+5. project-portfolio-summary - Summarize all work
+6. skill-gap-analysis - Compare skills vs target role
+
+**Files Created**:
+- prompts.yaml
+
+**Files Modified**:
+- app/main.py (added load_prompts(), 2 routes, updated index and docstring)
+
+**Next Steps**: None, feature complete
+
 ## 2026-02-21 19:15 - Enhanced Session Tracking with Pagination & SQLite
 
 **Status**: Complete

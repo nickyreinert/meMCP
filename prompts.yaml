@@ -1,0 +1,106 @@
+# prompts.yaml
+# MCP Prompts Configuration
+# ============================================================================
+# This file stores reusable prompt templates that guide LLMs and users
+# on how to interact with the meMCP server effectively.
+#
+# Schema:
+#   id:              Unique identifier (kebab-case)
+#   name:            Human-readable name
+#   description:     Brief explanation of what this prompt does
+#   use_case:        When/why to use this prompt
+#   prompt_template: The actual prompt text to use
+# ============================================================================
+
+prompts:
+  - id: build-resume
+    name: Build Resume
+    description: Generate a tailored resume from career data
+    use_case: Generate a chronological resume highlighting top skills and experience
+    prompt_template: |
+      Act as an expert technical recruiter. Fetch my stages and skills from the meMCP server. 
+      Build a chronological resume highlighting my top 3 technologies. Format as Markdown.
+
+  - id: build-cover-letter
+    name: Build Cover Letter
+    description: Write a personalized cover letter for a job application
+    use_case: Write a cover letter matching personal experience to specific job requirements
+    prompt_template: |
+      Fetch my identity and recent stages. Ask me for a target job description, then draft 
+      a cover letter matching my specific experience_years and skills to the job requirements.
+
+  - id: visualize-knowledge
+    name: Visualize Knowledge
+    description: Create visual representation of skills and technologies
+    use_case: Draw graphs or charts of skills and proficiency levels
+    prompt_template: |
+      Fetch my technologies and their relevance scores. Generate a Mermaid.js radar chart 
+      visualizing my proficiency across different tech stacks.
+
+  - id: analyze-career-growth
+    name: Analyze Career Growth
+    description: Analyze career progression and skill development over time
+    use_case: Identify career patterns and growth trajectories
+    prompt_template: |
+      Fetch all stages from the meMCP server ordered by date. Analyze the progression of 
+      roles, responsibilities, and technologies used. Identify key transitions and growth 
+      patterns. Provide insights on career trajectory and skill evolution.
+
+  - id: project-portfolio-summary
+    name: Project Portfolio Summary
+    description: Summarize all projects and notable work
+    use_case: Create an executive summary of side projects and published work
+    prompt_template: |
+      Fetch all oeuvre entries from the meMCP server. Categorize by type (coding, blog_post, 
+      article, book, website). Summarize the breadth of work, highlighting most impactful 
+      or recent projects. Format as a portfolio overview with key metrics.
+
+  - id: skill-gap-analysis
+    name: Skill Gap Analysis
+    description: Compare current skills against target role requirements
+    use_case: Identify missing skills for career development
+    prompt_template: |
+      Fetch my current skills and technologies from meMCP. Ask the user for a target job 
+      description or role requirements. Perform a gap analysis identifying: 1) matching skills, 
+      2) transferable skills, 3) missing skills to develop. Provide learning recommendations.
+
+  - id: interview-prep
+    name: Interview Preparation
+    description: Generate potential interview questions based on experience
+    use_case: Technical Interviewer
+    prompt_template: |
+      Act as a hiring manager for a Senior Developer role. Analyze my technologies and growth metrics. 
+      Generate 5 behavioral questions based on my actual career stages and 3 technical questions based on my most used skills.
+
+  - id: skill-gap-analysis
+    name: Career Coach
+    description: Provide personalized career advice based on current trajectory
+    use_case: Career coaching and mentorship
+    prompt_template: |
+      Compare my current technology_stack and proficiency metrics against the requirements 
+      for a [USER_INPUT: Role]. Identify which skills are missing and suggest which of my existing oeuvre 
+      projects I should expand to bridge the gap.
+
+  - id: blog-ideator
+    name: Blog Post Ideator
+    description: Generate blog post ideas based on expertise and trends
+    use_case: Content ideation for personal branding
+    prompt_template: |
+      Look at my oeuvre (articles and coding). Find a high-performing tag or technology with high relevance 
+      but few recent entries. Propose 3 unique blog post titles that would showcase my diversity metric.
+
+  - id: oss-contribution
+    name: Open Source Contribution Advisor
+    description: Suggest open source projects to contribute to based on skills
+    use_case: Finding relevant open source projects for contribution
+    prompt_template: |
+      Analyze my coding entities in oeuvre. Based on the technologies I use most frequently (e.g., Python, FastAPI), 
+      suggest what kind of Open Source projects I am best qualified to contribute to today.#
+
+  - id: narrative-bio
+    name: Narrative Bio
+    description: Write a compelling narrative biography
+    use_case: Personal branding and storytelling
+    prompt_template: |
+      Review my stages from the earliest start_date to now. Instead of a dry list, write a 3-paragraph professional 
+      'Origin Story' that highlights the transition between my education and my most significant job roles.

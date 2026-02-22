@@ -23,6 +23,8 @@ Routes:
   GET /schema                    → Data model schema (MCP)
   GET /index                     → Discovery root with all entity links (MCP)
   GET /coverage                  → Coverage contract (MCP)
+  GET /prompts                   → List all MCP prompt templates
+  GET /prompts/{id}              → Get specific prompt template
   GET /greeting                  → identity card (translated)
   GET /categories                → entity type list + counts
   GET /entities                  → paginated entity list (translated)
@@ -96,7 +98,15 @@ def load_config():
     with open(config_path) as f:
         return yaml.safe_load(f)
 
+def load_prompts():
+    """Load prompts.yaml from project root."""
+    prompts_path = Path(__file__).parent.parent / "prompts.yaml"
+    with open(prompts_path) as f:
+        data = yaml.safe_load(f)
+        return data.get("prompts", [])
+
 CONFIG = load_config()
+PROMPTS = load_prompts()
 APP_VERSION = "2.2.0"
 
 # Base URL for templates and documentation
@@ -365,10 +375,13 @@ async def index(request: Request):
             "schema":    "/schema — Explicit data model definition (MCP-compliant)",
             "index":     "/index — Discovery root with all entity links",
             "coverage":  "/coverage — Coverage contract (JSON)",
+            "prompts":   "/prompts — MCP prompt templates for guided LLM interactions",
         },
         "routes": {
             "/greeting":               "Identity card — name, tagline, bio, links",
             "/coverage":               "Session coverage report — see which endpoints you've visited and what's missing",
+            "/prompts":                "List all available MCP prompt templates (summarized)",
+            "/prompts/{id}":           "Get specific prompt template with full text",
             "/languages":              "Translation coverage per language",
             "/entities":               "Paginated entity list with filters (category (stage|oeuvre), sub_category(study|school|intern|part-time), skills, technology, tags)",
             "/entities/{id}":          "Single entity + extension data + relations",
@@ -482,6 +495,60 @@ async def index_endpoint(request: Request, conn=Depends(db)):
 @app.get("/health")
 async def health():
     return {"status": "ok", "ts": time.time(), "version": APP_VERSION}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP PROMPTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/prompts", summary="List all MCP prompt templates")
+@limiter.limit("120/minute")
+async def list_prompts(request: Request):
+    """
+    Returns all available MCP prompt templates (summarized, without full template).
+    
+    Prompts are reusable templates that guide LLMs and users on how to effectively
+    interact with the meMCP server to accomplish specific tasks like building resumes,
+    analyzing skills, or generating visualizations.
+    
+    Use GET /prompts/{prompt_id} to retrieve the full template.
+    """
+    prompts_summary = [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "description": p["description"],
+            "use_case": p["use_case"],
+            "url": f"/prompts/{p['id']}"
+        }
+        for p in PROMPTS
+    ]
+    return ok({
+        "prompts": prompts_summary,
+        "count": len(prompts_summary)
+    })
+
+
+@app.get("/prompts/{prompt_id}", summary="Get specific MCP prompt template")
+@limiter.limit("120/minute")
+async def get_prompt(request: Request, prompt_id: str):
+    """
+    Returns the complete prompt template for a specific prompt ID.
+    
+    The response includes:
+      - id: unique identifier
+      - name: human-readable name
+      - description: brief explanation
+      - use_case: when/why to use this prompt
+      - prompt_template: the full template text to use
+    
+    This template can be directly used by LLMs or adapted by users for their needs.
+    """
+    prompt = next((p for p in PROMPTS if p["id"] == prompt_id), None)
+    if not prompt:
+        raise HTTPException(404, f"Prompt '{prompt_id}' not found")
+    
+    return ok(prompt)
 
 
 @app.get("/schema", summary="MCP data model schema")
