@@ -6,13 +6,16 @@ Includes a flexible scraper framework with optional built-in LLM-powered content
 
 ## Features
 
-- Multi-language support (EN, DE)
+- Three-Tier access system (public, private, elevated) with token-based authentication
+- integretaion of LLMs as endpoints for real time interactions, like *job interview prep* or *project brainstorming* based on the data in the MCP
 - Aggregates data from GitHub, Medium, RSS feeds, Sitemaps, LinkedIn, by plain HTML scraping or manual YAML files
 - LLM-powered content extraction and enrichment (e.g., summarization, tag extraction, skill/technology classification)
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
-- endpoint `/prompts` to return a couple of example prompts that can be used to query the MCP programmatically (e.g., via LLM agents or external scripts)
-- endpoint `/mcp/tools` to return a list of available MCP tools that can be used for programmatic queries (e.g., via LLM agents or external scripts)
+- full MCP compliance with endpoints for index, coverage contract, prompts, tools, and resources:
+  - endpoint `/prompts` to return a couple of example prompts that can be used to query the MCP programmatically (e.g., via LLM agents or external scripts)
+  - endpoint `/mcp/tools` to return a list of available MCP tools that can be used for programmatic queries (e.g., via LLM agents or external scripts)
+  - endpoint `/mcp/resources` to return a browsable list of data resources (e.g., entities, categories, technologies, skills, tags) mapped to REST endpoints for easy access and integration
 - calculate different metrics for `skills`, `technologies` and `tags`:
   - `proficiency` (based on recency and duration of experience)
   - `experience_years` (total years of experience)
@@ -23,6 +26,7 @@ Includes a flexible scraper framework with optional built-in LLM-powered content
   - `growth` (trend of usage over time, e.g., increasing, stable, decreasing)
   - `distribution` (indicates distribution of a tag, skill, or technology across different entities flavors, stage categories (job, education, ...) or oeuvre categories (coding, article, book, ...))
   - `relevance` (a composite score based on the above metrics to indicate overall relevance of a skill/technology/tag in the profile)
+- Multi-language support (EN, DE, ...) with automatic detection and translation of content
 
 ## Available Connectors
 

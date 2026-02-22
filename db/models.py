@@ -150,25 +150,40 @@ CREATE TABLE IF NOT EXISTS scrape_cache (
 
 -- ── Access tokens ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tokens (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    token_value TEXT NOT NULL UNIQUE,
-    owner_name  TEXT NOT NULL,
-    expires_at  TEXT NOT NULL,   -- ISO-8601 datetime (UTC)
-    is_active   INTEGER DEFAULT 1, -- 1=active, 0=revoked
-    created_at  TEXT NOT NULL
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_value             TEXT NOT NULL UNIQUE,
+    owner_name              TEXT NOT NULL,
+    expires_at              TEXT NOT NULL,       -- ISO-8601 datetime (UTC)
+    is_active               INTEGER DEFAULT 1,   -- 1=active, 0=revoked
+    created_at              TEXT NOT NULL,
+    -- Tier and per-token intelligence budget overrides (NULL = use global defaults)
+    tier                    TEXT DEFAULT 'private',  -- private | elevated
+    max_tokens_per_session  INTEGER,             -- override: max LLM output tokens per session
+    max_calls_per_day       INTEGER,             -- override: max intelligence calls per day
+    max_input_chars         INTEGER,             -- override: max input chars before truncation
+    max_output_chars        INTEGER              -- override: max output chars after LLM response
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_value ON tokens(token_value);
+CREATE INDEX IF NOT EXISTS idx_tokens_tier  ON tokens(tier);
 
--- ── Usage logs (private-stage request tracking) ───────────────────────────────
+-- ── Usage logs (all-stage request tracking) ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS usage_logs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     token_id        INTEGER NOT NULL REFERENCES tokens(id),
     endpoint_called TEXT NOT NULL,
     timestamp       TEXT NOT NULL,  -- ISO-8601 datetime (UTC)
-    input_args      TEXT            -- JSON-encoded query params / body args
+    input_args      TEXT,           -- JSON-encoded query params / body args
+    -- Intelligence hub extension (NULL for non-LLM calls)
+    tier            TEXT,           -- private | elevated (caller's tier at time of call)
+    api_provider    TEXT,           -- groq | perplexity (NULL for standard calls)
+    input_length    INTEGER,        -- character count of the raw input sent
+    input_text      TEXT,           -- actual input text (truncated to max_input_chars for storage)
+    tokens_used     INTEGER         -- LLM output tokens consumed (from API response)
 );
-CREATE INDEX IF NOT EXISTS idx_usage_token     ON usage_logs(token_id);
-CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_token        ON usage_logs(token_id);
+CREATE INDEX IF NOT EXISTS idx_usage_timestamp    ON usage_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_provider     ON usage_logs(api_provider);
+CREATE INDEX IF NOT EXISTS idx_usage_date_token   ON usage_logs(token_id, timestamp);
 """
 
 
@@ -183,11 +198,39 @@ def get_db(path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(path: Path = DB_PATH):
-    """Initialize database with simplified schema."""
+    """Initialize database schema and run any pending column migrations."""
     conn = get_db(path)
     conn.executescript(SCHEMA)
+    _migrate_columns(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """
+    Safely add new columns to existing tables without destroying data.
+    Each ALTER TABLE is wrapped in a try/except so it is a no-op when the
+    column already exists (SQLite raises OperationalError in that case).
+    """
+    migrations = [
+        # tokens — tier + per-token budget overrides
+        "ALTER TABLE tokens ADD COLUMN tier TEXT DEFAULT 'private'",
+        "ALTER TABLE tokens ADD COLUMN max_tokens_per_session INTEGER",
+        "ALTER TABLE tokens ADD COLUMN max_calls_per_day INTEGER",
+        "ALTER TABLE tokens ADD COLUMN max_input_chars INTEGER",
+        "ALTER TABLE tokens ADD COLUMN max_output_chars INTEGER",
+        # usage_logs — intelligence hub extension columns
+        "ALTER TABLE usage_logs ADD COLUMN tier TEXT",
+        "ALTER TABLE usage_logs ADD COLUMN api_provider TEXT",
+        "ALTER TABLE usage_logs ADD COLUMN input_length INTEGER",
+        "ALTER TABLE usage_logs ADD COLUMN input_text TEXT",
+        "ALTER TABLE usage_logs ADD COLUMN tokens_used INTEGER",
+    ]
+    for stmt in migrations:
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass  # Column already exists — skip silently
 
 
 # --- ENTITY CRUD ---

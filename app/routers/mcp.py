@@ -7,10 +7,16 @@ Purpose:
   Provides read-only tools and resources that enable LLMs to query the database without SQL.
 
 Endpoints:
-  GET /mcp/tools            → List available tool definitions with schemas
-  POST /mcp/tools/call      → Execute a tool with arguments
-  GET /mcp/resources        → List available MCP resources (REST endpoint mappings)
-  GET /mcp/resources/read   → Read a specific resource by URI
+  GET  /mcp/tools                              → List available tool definitions with schemas
+  POST /mcp/tools/call                         → Execute a tool with arguments
+  GET  /mcp/resources                          → List available MCP resources
+  GET  /mcp/resources/read                     → Read a specific resource by URI
+
+Intelligence Hub endpoints (Elevated tier only — HTTP 403 for Private/Public):
+  POST /mcp/intelligence/simulate_interview    → Groq-generated interview questions
+  POST /mcp/intelligence/market_relevance_check → Perplexity live-search market analysis
+  POST /mcp/intelligence/ask_profile_agent     → Groq RAG over profile entities
+  POST /mcp/intelligence/job_match             → Groq job-description ↔ profile match score
 
 Tool execution flow:
   1. Client sends tool name + arguments
@@ -24,12 +30,13 @@ Resource resolution flow:
   3. Executes endpoint logic and returns data in MCP content envelope
 
 Security:
-  - All operations are READ-ONLY
-  - Uses dependency injection for database connections
+  - All standard tools are READ-ONLY; no database modifications
+  - Intelligence endpoints require Elevated tier token (HTTP 403 otherwise)
   - Input validation on all arguments
 
 Dependencies:
   - app.mcp_tools: Tool registry and execution logic
+  - app.services.intelligence: Intelligence Hub (Groq + Perplexity)
   - db.models: Database query functions via dependency injection
 """
 
@@ -41,8 +48,9 @@ import json
 
 from app.mcp_tools import get_tool_definitions, execute_tool
 from app.dependencies.access_control import (
-    require_private_access, TokenInfo, log_usage,
+    require_private_access, require_elevated_access, TokenInfo, log_usage,
 )
+from app.services.intelligence import get_hub
 from db.models import get_db, DB_PATH
 
 
@@ -532,3 +540,278 @@ async def read_mcp_resource(
         raise HTTPException(500, f"Failed to import dependencies: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"Resource resolution failed: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# INTELLIGENCE HUB  (Elevated tier only)
+# ---------------------------------------------------------------------------
+#
+# All four endpoints below require an Elevated-tier token.
+# Callers with Public or Private tokens receive HTTP 403 with upgrade instructions.
+#
+# Usage logging: every call writes to usage_logs with:
+#   token_id, endpoint_called, timestamp, input_args (JSON),
+#   tier="elevated", api_provider, input_length, input_text, tokens_used
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/intelligence/simulate_interview",
+    summary="[Elevated] Generate targeted interview questions from real experience",
+)
+@limiter.limit("10/minute")
+async def simulate_interview(
+    request: Request,
+    body: dict,
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_elevated_access),
+):
+    """
+    **Elevated-tier only.** Generate 3 challenging interview questions tailored
+    to a job description, grounded in actual portfolio projects and skills.
+
+    **Provider:** Groq (llama-3.3-70b-versatile)
+
+    **Request body:**
+    ```json
+    { "job_description": "Senior Python Engineer at FinTech startup..." }
+    ```
+
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "data": {
+            "tool": "simulate_interview",
+            "provider": "groq",
+            "model": "llama-3.3-70b-versatile",
+            "questions": "1. ...\n2. ...\n3. ...",
+            "tokens_used": 412,
+            "context_used": { "portfolio_items": 10, "skills": 10 }
+        }
+    }
+    ```
+
+    **Usage logged (usage_logs):**
+    - token_id, endpoint, timestamp
+    - tier: elevated
+    - api_provider: groq
+    - input_length: character count of job_description
+    - input_text: job_description (truncated to per-token max_input_chars)
+    - tokens_used: LLM output tokens from Groq response
+
+    **Errors:**
+    - 400: Missing job_description field
+    - 403: Token is not Elevated tier
+    - 429: Daily call limit or session token budget exceeded
+    - 502: Groq API error
+    - 503: Groq not configured (missing API key)
+    """
+    job_description = body.get("job_description", "").strip()
+    if not job_description:
+        raise HTTPException(400, "Missing required field: 'job_description'")
+
+    hub = get_hub()
+    result = hub.simulate_interview(
+        conn, token_info, job_description,
+        endpoint=request.url.path,
+    )
+    return ok(result, meta={"access_stage": token_info.stage})
+
+
+@router.post(
+    "/intelligence/market_relevance_check",
+    summary="[Elevated] Benchmark technology stack against 2026 industry trends",
+)
+@limiter.limit("10/minute")
+async def market_relevance_check(
+    request: Request,
+    body: dict,
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_elevated_access),
+):
+    """
+    **Elevated-tier only.** Use Perplexity live-search to benchmark the
+    technology stack against current (2026) industry demands for a given role.
+    Returns a Future-Proof Score (0–100), strengths, gaps, and recommendations
+    with web citations.
+
+    **Provider:** Perplexity (sonar-reasoning) — live web data
+
+    **Request body:**
+    ```json
+    { "role": "Fullstack Developer" }
+    ```
+
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "data": {
+            "tool": "market_relevance_check",
+            "provider": "perplexity",
+            "model": "sonar-reasoning",
+            "role": "Fullstack Developer",
+            "analysis": "Future-Proof Score: 78/100\n\nStrengths: ...",
+            "citations": ["https://...", "https://..."],
+            "tokens_used": 621,
+            "technologies_evaluated": 20
+        }
+    }
+    ```
+
+    **Usage logged (usage_logs):**
+    - token_id, endpoint, timestamp
+    - tier: elevated
+    - api_provider: perplexity
+    - input_length: character count of role string
+    - input_text: role (truncated to per-token max_input_chars)
+    - tokens_used: LLM output tokens from Perplexity response
+
+    **Errors:**
+    - 400: Missing role field
+    - 403: Token is not Elevated tier
+    - 429: Daily call limit or session token budget exceeded
+    - 502: Perplexity API error
+    - 503: Perplexity not configured (missing API key)
+    """
+    role = body.get("role", "").strip()
+    if not role:
+        raise HTTPException(400, "Missing required field: 'role'")
+
+    hub = get_hub()
+    result = hub.market_relevance_check(
+        conn, token_info, role,
+        endpoint=request.url.path,
+    )
+    return ok(result, meta={"access_stage": token_info.stage})
+
+
+@router.post(
+    "/intelligence/ask_profile_agent",
+    summary="[Elevated] Ask a free-form question about the profile (RAG)",
+)
+@limiter.limit("10/minute")
+async def ask_profile_agent(
+    request: Request,
+    body: dict,
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_elevated_access),
+):
+    """
+    **Elevated-tier only.** General-purpose RAG (Retrieval-Augmented Generation)
+    tool.  Searches the entities table for relevant context, then uses Groq to
+    synthesise a professional, objective answer.
+
+    **Provider:** Groq (llama-3.3-70b-versatile)
+
+    **Request body:**
+    ```json
+    { "question": "What experience does Nicky have with machine learning?" }
+    ```
+
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "data": {
+            "tool": "ask_profile_agent",
+            "provider": "groq",
+            "model": "llama-3.3-70b-versatile",
+            "answer": "Based on the profile data, Nicky has...",
+            "tokens_used": 318,
+            "context_used": { "entities_retrieved": 6 }
+        }
+    }
+    ```
+
+    **Usage logged (usage_logs):**
+    - token_id, endpoint, timestamp
+    - tier: elevated
+    - api_provider: groq
+    - input_length: character count of question
+    - input_text: question (truncated to per-token max_input_chars)
+    - tokens_used: LLM output tokens from Groq response
+
+    **Errors:**
+    - 400: Missing question field
+    - 403: Token is not Elevated tier
+    - 429: Daily call limit or session token budget exceeded
+    - 502: Groq API error
+    - 503: Groq not configured (missing API key)
+    """
+    question = body.get("question", "").strip()
+    if not question:
+        raise HTTPException(400, "Missing required field: 'question'")
+
+    hub = get_hub()
+    result = hub.ask_profile_agent(
+        conn, token_info, question,
+        endpoint=request.url.path,
+    )
+    return ok(result, meta={"access_stage": token_info.stage})
+
+
+@router.post(
+    "/intelligence/job_match",
+    summary="[Elevated] Score how well a job description matches the profile",
+)
+@limiter.limit("10/minute")
+async def job_match(
+    request: Request,
+    body: dict,
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_elevated_access),
+):
+    """
+    **Elevated-tier only.** Analyse a job description against the full profile
+    (skills, technologies, career history) and return a structured match report
+    with a numeric Match Score (0–100), matched strengths, gaps, and a verdict.
+
+    **Provider:** Groq (llama-3.3-70b-versatile)
+
+    **Request body:**
+    ```json
+    { "job_description": "We are looking for a Senior Data Engineer with 5+ years..." }
+    ```
+
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "data": {
+            "tool": "job_match",
+            "provider": "groq",
+            "model": "llama-3.3-70b-versatile",
+            "match_report": "Match Score: 82/100\n\nStrengths:\n- ...\n\nGaps:\n- ...\n\nVerdict: Strong match...",
+            "tokens_used": 534,
+            "context_used": { "skills": 15, "technologies": 20, "career_stages": 6 }
+        }
+    }
+    ```
+
+    **Usage logged (usage_logs):**
+    - token_id, endpoint, timestamp
+    - tier: elevated
+    - api_provider: groq
+    - input_length: character count of job_description
+    - input_text: job_description (truncated to per-token max_input_chars)
+    - tokens_used: LLM output tokens from Groq response
+
+    **Errors:**
+    - 400: Missing job_description field
+    - 403: Token is not Elevated tier
+    - 429: Daily call limit or session token budget exceeded
+    - 502: Groq API error
+    - 503: Groq not configured (missing API key)
+    """
+    job_description = body.get("job_description", "").strip()
+    if not job_description:
+        raise HTTPException(400, "Missing required field: 'job_description'")
+
+    hub = get_hub()
+    result = hub.job_match(
+        conn, token_info, job_description,
+        endpoint=request.url.path,
+    )
+    return ok(result, meta={"access_stage": token_info.stage})

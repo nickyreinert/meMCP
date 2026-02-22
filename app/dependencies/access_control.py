@@ -6,7 +6,8 @@ Implements a three-stage access system for the meMCP API:
 
   - Public:   No token supplied → metadata-only (tool/resource/prompt listings).
   - Private:  Valid Bearer token → full data access, all calls tracked.
-  - Elevated: Reserved for future LLM features (same token mechanism, extended later).
+  - Elevated: Valid Bearer token with tier='elevated' → all Private access plus
+              Intelligence Hub tools (Groq/Perplexity LLM calls).
 
 Token lookup (checked in order):
   1. Authorization: Bearer <token>  header
@@ -22,6 +23,17 @@ Protect an endpoint that requires a valid token::
     async def call_tool(
         ...,
         token_info: TokenInfo = Depends(require_private_access),
+    ):
+        ...
+
+Require Elevated tier specifically::
+
+    from app.dependencies.access_control import require_elevated_access
+
+    @router.post("/mcp/intelligence/simulate_interview")
+    async def simulate_interview(
+        ...,
+        token_info: TokenInfo = Depends(require_elevated_access),
     ):
         ...
 
@@ -68,7 +80,12 @@ class TokenInfo:
     """Validated token metadata returned by access dependencies."""
     id:         int
     owner_name: str
-    stage:      str   # STAGE_PRIVATE | STAGE_ELEVATED
+    stage:      str          # STAGE_PRIVATE | STAGE_ELEVATED
+    # Per-token intelligence budget overrides (None = use global defaults from config.yaml)
+    max_tokens_per_session:  Optional[int] = None
+    max_calls_per_day:       Optional[int] = None
+    max_input_chars:         Optional[int] = None
+    max_output_chars:        Optional[int] = None
 
 
 # ── Internal DB helpers ───────────────────────────────────────────────────────
@@ -91,7 +108,9 @@ def _validate_token(conn, token_value: str) -> Optional[TokenInfo]:
     """
     row = conn.execute(
         """
-        SELECT id, owner_name, expires_at, is_active
+        SELECT id, owner_name, expires_at, is_active,
+               tier, max_tokens_per_session, max_calls_per_day,
+               max_input_chars, max_output_chars
         FROM tokens
         WHERE token_value = ?
         """,
@@ -116,10 +135,18 @@ def _validate_token(conn, token_value: str) -> Optional[TokenInfo]:
     if now > expires_at:
         return None
 
+    # Map DB tier value to stage constant
+    db_tier = (row["tier"] or "private").lower()
+    stage = STAGE_ELEVATED if db_tier == "elevated" else STAGE_PRIVATE
+
     return TokenInfo(
         id=row["id"],
         owner_name=row["owner_name"],
-        stage=STAGE_PRIVATE,  # Elevated stage differentiation added later
+        stage=stage,
+        max_tokens_per_session=row["max_tokens_per_session"],
+        max_calls_per_day=row["max_calls_per_day"],
+        max_input_chars=row["max_input_chars"],
+        max_output_chars=row["max_output_chars"],
     )
 
 
@@ -251,3 +278,36 @@ Dependency: returns ``None`` (public) or ``TokenInfo`` (private/elevated).
 Raises HTTP 403 only when a token IS present but is invalid/expired.
 Inject as ``token_info: TokenInfo | None = Depends(get_access_stage)``.
 """
+
+
+def require_elevated_access(
+    token_info: TokenInfo = Depends(require_private_access),
+) -> TokenInfo:
+    """
+    Dependency: raises HTTP 403 if the token does not have ELEVATED tier.
+
+    Compose on top of ``require_private_access`` so that the basic token
+    validation (existence, expiry, activity) is always checked first.
+
+    Inject as ``token_info: TokenInfo = Depends(require_elevated_access)``.
+
+    To upgrade a token to the Elevated tier, use::
+
+        python scripts/manage_tokens.py upgrade --id <token_id>
+    """
+    if token_info.stage != STAGE_ELEVATED:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "stage": token_info.stage,
+                "required_stage": STAGE_ELEVATED,
+                "message": (
+                    "Access Restricted: this endpoint requires an Elevated-tier token. "
+                    "Your current token has Private-tier access only. "
+                    "To unlock Intelligence Hub tools (AI reasoning, live search, "
+                    "interview simulation, market analysis), upgrade your token via: "
+                    "python scripts/manage_tokens.py upgrade --id <token_id>"
+                ),
+            },
+        )
+    return token_info

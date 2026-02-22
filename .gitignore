@@ -10,3 +10,4 @@ __pycache__
 .github/
 logs/
 .mailmap
+docs/ADMIN_BACKEND_CONCEPT.md
