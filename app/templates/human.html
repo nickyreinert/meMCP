@@ -59,10 +59,17 @@
     <body>
         <h2>hello fellow human being</h2>
 
-        <p>You have reached a meMCP server interface. It is designed to present data about your personal profile in an LLM digestible format.</p>
+        <p>You have reached a meMCP server interface. It is designed to present data about a specific personal profile in an LLM digestible format.</p>
         <p>If you want to learn more about meMCP, check out <a href="https://github.com/nickyreinert/meMCP" target="_blank">Doc and Sourcecode @ GitHub</a></p>
 
-        <p>Inject the following instruction set into your LLM to interface with the MCP server:</p>
+        <p>Try the following quick prompt to get a brief overview of the profile:</p>
+        <pre>
+Act as a profile analyst. You have access to an MCP server at {{ base_url }}
+Fetch the data model first to understand the schema.
+Then, traverse all available endpoints to gather data until you have achieved 50% coverage as indicated by the server's headers and /coverage endpoint.
+Finally, produce a concise report summarizing the individual's professional profile, key skills, and notable projects, based strictly on the retrieved data.
+        </pre>
+        <p>Inject the following instruction set into your LLM to interface with the MCP server for an extensive report:</p>
     
             <pre>
     Act as a profile analyst. You have access to an MCP server at {{ base_url }}
