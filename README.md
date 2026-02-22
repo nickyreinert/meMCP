@@ -11,6 +11,8 @@ Includes a flexible scraper framework with optional built-in LLM-powered content
 - LLM-powered content extraction and enrichment (e.g., summarization, tag extraction, skill/technology classification)
 - Entity graph with relationships
 - RESTful API with advanced search and filtering
+- endpoint `/prompts` to return a couple of example prompts that can be used to query the MCP programmatically (e.g., via LLM agents or external scripts)
+- endpoint `/mcp/tools` to return a list of available MCP tools that can be used for programmatic queries (e.g., via LLM agents or external scripts)
 - calculate different metrics for `skills`, `technologies` and `tags`:
   - `proficiency` (based on recency and duration of experience)
   - `experience_years` (total years of experience)

@@ -535,10 +535,10 @@ def list_entities_needing_translation(conn: sqlite3.Connection,
 # --- DOMAIN QUERIES ---
 
 def query_stages(conn: sqlite3.Connection,
-                 category: str = None,
-                 tag: str = None,
-                 skill: str = None,
-                 technology: str = None) -> list[dict]:
+                 category: Optional[str] = None,
+                 tag: Optional[str] = None,
+                 skill: Optional[str] = None,
+                 technology: Optional[str] = None) -> list[dict]:
     """
     Return all stages (education, jobs) ordered chronologically.
     category filter: education|job
@@ -574,10 +574,10 @@ def query_stages(conn: sqlite3.Connection,
 
 
 def query_oeuvre(conn: sqlite3.Connection,
-                 category: str = None,
-                 tag: str = None,
-                 skill: str = None,
-                 technology: str = None) -> list[dict]:
+                 category: Optional[str] = None,
+                 tag: Optional[str] = None,
+                 skill: Optional[str] = None,
+                 technology: Optional[str] = None) -> list[dict]:
     """
     Return all oeuvre (work items).
     category filter: coding|blog_post|article|book|website

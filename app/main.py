@@ -25,6 +25,8 @@ Routes:
   GET /coverage                  → Coverage contract (MCP)
   GET /prompts                   → List all MCP prompt templates
   GET /prompts/{id}              → Get specific prompt template
+  GET /mcp/tools                 → List available MCP tools for programmatic queries
+  POST /mcp/tools/call           → Execute an MCP tool with arguments
   GET /greeting                  → identity card (translated)
   GET /categories                → entity type list + counts
   GET /entities                  → paginated entity list (translated)
@@ -86,6 +88,7 @@ from db.models import (
 )
 
 from app.session_tracker import SessionTracker
+from app.mcp_tools import get_tool_definitions, execute_tool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -903,6 +906,93 @@ async def schema(request: Request):
             }
         }
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP TOOLS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/mcp/tools", summary="List available MCP tools")
+@limiter.limit("120/minute")
+async def list_mcp_tools(request: Request):
+    """
+    Returns all available MCP tools for programmatic database queries.
+    
+    Tools enable LLMs to query the database without raw SQL access.
+    Each tool includes name, description, and JSON Schema for arguments.
+    
+    Available tools:
+      - query_stages: Query career history (education, jobs)
+      - query_portfolio: Query portfolio items (repos, articles, books)
+      - get_technology_metrics: Get proficiency metrics for a technology
+    
+    Execute tools via POST /mcp/tools/call with tool name and arguments.
+    """
+    tools = get_tool_definitions()
+    return ok({
+        "tools": tools,
+        "count": len(tools),
+        "execution_endpoint": "/mcp/tools/call"
+    })
+
+
+@app.post("/mcp/tools/call", summary="Execute an MCP tool")
+@limiter.limit("60/minute")
+async def call_mcp_tool(
+    request: Request,
+    tool_request: dict,
+    conn=Depends(db)
+):
+    """
+    Execute a specific MCP tool with provided arguments.
+    
+    Request body:
+    {
+        "tool": "tool_name",
+        "arguments": {
+            "arg1": "value1",
+            "arg2": "value2"
+        }
+    }
+    
+    Returns:
+    {
+        "status": "success",
+        "data": { ... tool-specific result ... }
+    }
+    
+    All tools are READ-ONLY. No database modifications are possible.
+    
+    Examples:
+      - query_stages:
+        {"tool": "query_stages", "arguments": {"category": "job"}}
+      
+      - query_portfolio:
+        {"tool": "query_portfolio", "arguments": {"flavor": "coding", "tag": "Python"}}
+      
+      - get_technology_metrics:
+        {"tool": "get_technology_metrics", "arguments": {"tech_name": "JavaScript"}}
+    """
+    # Validate request structure
+    if "tool" not in tool_request:
+        raise HTTPException(400, "Missing 'tool' field in request body")
+    
+    tool_name = tool_request["tool"]
+    arguments = tool_request.get("arguments", {})
+    
+    # Validate tool exists
+    tool_names = [t["name"] for t in get_tool_definitions()]
+    if tool_name not in tool_names:
+        raise HTTPException(404, f"Unknown tool '{tool_name}'. Available tools: {', '.join(tool_names)}")
+    
+    # Execute tool
+    try:
+        result = execute_tool(conn, tool_name, arguments)
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Tool execution failed: {str(e)}")
 
 
 @app.get("/coverage", summary="Session coverage report")
