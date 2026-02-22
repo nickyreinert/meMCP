@@ -40,6 +40,9 @@ from slowapi.util import get_remote_address
 import json
 
 from app.mcp_tools import get_tool_definitions, execute_tool
+from app.dependencies.access_control import (
+    require_private_access, TokenInfo, log_usage,
+)
 from db.models import get_db, DB_PATH
 
 
@@ -187,7 +190,8 @@ async def list_mcp_tools(request: Request):
 async def call_mcp_tool(
     request: Request,
     tool_request: dict,
-    conn=Depends(db)
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_private_access),
 ):
     """
     Execute a specific MCP tool with provided arguments.
@@ -233,9 +237,12 @@ async def call_mcp_tool(
     # Validate request structure
     if "tool" not in tool_request:
         raise HTTPException(400, "Missing 'tool' field in request body")
-    
+
     tool_name = tool_request["tool"]
     arguments = tool_request.get("arguments", {})
+
+    # Log full body args now that they're parsed (supplements the endpoint-level log)
+    log_usage(conn, token_info.id, request.url.path, tool_request)
     
     # Validate tool exists
     tool_names = [t["name"] for t in get_tool_definitions()]
@@ -321,7 +328,8 @@ async def read_mcp_resource(
     uri: str = Query(..., description="Resource URI (e.g., me://profile/greeting)"),
     lang: Optional[str] = Query(None, description="Language preference (en|de)"),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
-    conn=Depends(db)
+    conn=Depends(db),
+    token_info: TokenInfo = Depends(require_private_access),
 ):
     """
     Resolve and read a specific MCP resource by URI.
@@ -507,15 +515,18 @@ async def read_mcp_resource(
         # Wrap result in MCP content envelope
         data_json = json.dumps(result_data, ensure_ascii=False, indent=2)
         
-        return ok({
-            "contents": [
-                {
-                    "uri": uri,
-                    "mimeType": resource["mimeType"],
-                    "text": data_json
-                }
-            ]
-        })
+        return ok(
+            {
+                "contents": [
+                    {
+                        "uri": uri,
+                        "mimeType": resource["mimeType"],
+                        "text": data_json,
+                    }
+                ]
+            },
+            meta={"access_stage": token_info.stage},
+        )
         
     except ImportError as e:
         raise HTTPException(500, f"Failed to import dependencies: {str(e)}")

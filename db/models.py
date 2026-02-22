@@ -147,6 +147,28 @@ CREATE TABLE IF NOT EXISTS scrape_cache (
     etag        TEXT,
     status_code INTEGER
 );
+
+-- ── Access tokens ─────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tokens (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_value TEXT NOT NULL UNIQUE,
+    owner_name  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,   -- ISO-8601 datetime (UTC)
+    is_active   INTEGER DEFAULT 1, -- 1=active, 0=revoked
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_value ON tokens(token_value);
+
+-- ── Usage logs (private-stage request tracking) ───────────────────────────────
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id        INTEGER NOT NULL REFERENCES tokens(id),
+    endpoint_called TEXT NOT NULL,
+    timestamp       TEXT NOT NULL,  -- ISO-8601 datetime (UTC)
+    input_args      TEXT            -- JSON-encoded query params / body args
+);
+CREATE INDEX IF NOT EXISTS idx_usage_token     ON usage_logs(token_id);
+CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_logs(timestamp);
 """
 
 

@@ -89,6 +89,7 @@ from db.models import (
 
 from app.session_tracker import SessionTracker
 from app.routers import mcp
+from app.dependencies.access_control import require_private_access, TokenInfo
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,24 +540,30 @@ async def list_prompts(request: Request):
 
 @app.get("/prompts/{prompt_id}", summary="Get specific MCP prompt template")
 @limiter.limit("120/minute")
-async def get_prompt(request: Request, prompt_id: str):
+async def get_prompt(
+    request: Request,
+    prompt_id: str,
+    token_info: TokenInfo = Depends(require_private_access),
+):
     """
     Returns the complete prompt template for a specific prompt ID.
-    
+
+    Requires a valid token (Private stage).
+
     The response includes:
       - id: unique identifier
       - name: human-readable name
       - description: brief explanation
       - use_case: when/why to use this prompt
       - prompt_template: the full template text to use
-    
+
     This template can be directly used by LLMs or adapted by users for their needs.
     """
     prompt = next((p for p in PROMPTS if p["id"] == prompt_id), None)
     if not prompt:
         raise HTTPException(404, f"Prompt '{prompt_id}' not found")
-    
-    return ok(prompt)
+
+    return ok(prompt, meta={"access_stage": token_info.stage})
 
 
 @app.get("/schema", summary="MCP data model schema")
