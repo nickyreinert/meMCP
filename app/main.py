@@ -382,6 +382,8 @@ async def index(request: Request):
             "index":     "/index — Discovery root with all entity links",
             "coverage":  "/coverage — Coverage contract (JSON)",
             "prompts":   "/prompts — MCP prompt templates for guided LLM interactions",
+            "tools":     "/mcp/tools — Programmatic database query tools (read-only)",
+            "resources": "/mcp/resources — Browsable data resources mapped to REST endpoints",
         },
         "routes": {
             "/greeting":               "Identity card — name, tagline, bio, links",
