@@ -403,23 +403,31 @@ def build_endpoint_guard(protected_config: dict):
         conn = get_db(DB_PATH)
         try:
             token_info = _validate_token(conn, raw_token)
+
+            if not token_info:
+                return _forbidden_json(
+                    STAGE_PUBLIC,
+                    "Access Restricted: token is invalid, expired, or revoked.",
+                )
+
+            if required == STAGE_ELEVATED and token_info.stage != STAGE_ELEVATED:
+                return _forbidden_json(
+                    token_info.stage,
+                    (
+                        "Access Restricted: this endpoint requires an Elevated-tier token. "
+                        "Your current token has Private-tier access only."
+                    ),
+                )
+
+            # Log the access — the only logging point for routes that have no
+            # require_private_access dependency (most routes in main.py).
+            try:
+                qp = {k: v for k, v in request.query_params.items() if k != "token"}
+                log_usage(conn, token_info.id, path, qp or None)
+            except Exception:
+                pass
         finally:
             conn.close()
-
-        if not token_info:
-            return _forbidden_json(
-                STAGE_PUBLIC,
-                "Access Restricted: token is invalid, expired, or revoked.",
-            )
-
-        if required == STAGE_ELEVATED and token_info.stage != STAGE_ELEVATED:
-            return _forbidden_json(
-                token_info.stage,
-                (
-                    "Access Restricted: this endpoint requires an Elevated-tier token. "
-                    "Your current token has Private-tier access only."
-                ),
-            )
 
         return await call_next(request)
 
