@@ -11,3 +11,5 @@ __pycache__
 logs/
 .mailmap
 docs/ADMIN_BACKEND_CONCEPT.md
+connectors/.env
+connectors/proxy/data/

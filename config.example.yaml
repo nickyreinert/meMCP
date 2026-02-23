@@ -79,21 +79,26 @@ llm:
   shrink_text: false
   shrink_skip_chars: 3
 
-# ── Intelligence Hub (Elevated tier only) ────────────────────────────────────
-intelligence:
-  # Provider models
-  groq_model: llama-3.3-70b-versatile
-  perplexity_model: sonar-reasoning
-  perplexity_api_key: ""
+# ── Chat Proxy ────────────────────────────────────────────────────────────────
+chat:
+  # LLM backend: groq | ollama
+  host: groq
+  model: llama-3.3-70b-versatile
+  ollama_url: http://localhost:11434  # used when host: ollama
 
-  # Default budget limits (can be overridden per-token via manage_tokens.py)
-  max_tokens_per_session: 4000       # Max LLM output tokens consumed per session
-  max_calls_per_day: 20              # Max intelligence API calls per token per day
+  # Connection (env vars MEMCP_URL / PROXY_DB_PATH override these)
+  memcp_url: http://localhost:8000
+  db_path: data/proxy.db
 
-  # Truncation (applied before sending to LLM and to the returned response)
-  max_input_chars: 2000              # Truncate incoming text to this length before LLM call
-  max_output_chars: 3000             # Truncate LLM response to this length before returning
+  # Rate limiting (per chat_id, sliding 60-second window)
+  rate_limit_per_minute: 20
 
+  # Conversation memory
+  max_history: 10                    # conversation turns kept per session
+
+  # Truncation
+  max_input_chars: 2000              # truncate incoming text before sending to LLM
+  max_output_chars: 3000             # truncate LLM response before returning
 
 # ── Endpoint Access Control ────────────────────────────────────────────────────
 # Configures which endpoints require a token and at which tier.
@@ -126,13 +131,6 @@ protected_endpoints:
     - /mcp/resources/read
     - /admin/rebuild
     - /admin/translate
-
-  # Require an Elevated-tier token — all LLM-enabled Intelligence Hub endpoints.
-  elevated_required:
-    - /mcp/intelligence/simulate_interview
-    - /mcp/intelligence/market_relevance_check
-    - /mcp/intelligence/ask_profile_agent
-    - /mcp/intelligence/job_match
 
 categories:
   identities: basic, links, contact # "people" to come
