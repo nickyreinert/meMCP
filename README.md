@@ -4,6 +4,8 @@ A FastAPI-based Model Context Protocol (MCP) server that aggregates and serves y
 
 Includes a flexible scraper framework with optional built-in LLM-powered content extraction and enrichment, supporting multiple data sources like GitHub, Medium, LinkedIn, RSS feeds, and more.
 
+For your convenience look at the [meMCP Skill](skills/meMCP-SKILL.md) for how to interact with this server programmatically, e.g., via an LLM agent or external scripts.
+
 ## Features
 
 - Three-Tier access system (public, private, elevated) with token-based authentication
