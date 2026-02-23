@@ -70,6 +70,76 @@ session:
     /technology/{name}: {paginated: false} # Technology detail
     /tags/{tag_name}: {paginated: false}   # Tag detail with metrics
 
+llm:
+  backend: ollama
+  model: mistral-small:24b-instruct-2501-q4_K_M
+  groq_api_key: ""
+  ollama_url: http://localhost:11434
+
+  shrink_text: false
+  shrink_skip_chars: 3
+
+# ── Intelligence Hub (Elevated tier only) ────────────────────────────────────
+intelligence:
+  # Provider models
+  groq_model: llama-3.3-70b-versatile
+  perplexity_model: sonar-reasoning
+  perplexity_api_key: ""
+
+  # Default budget limits (can be overridden per-token via manage_tokens.py)
+  max_tokens_per_session: 4000       # Max LLM output tokens consumed per session
+  max_calls_per_day: 20              # Max intelligence API calls per token per day
+
+  # Truncation (applied before sending to LLM and to the returned response)
+  max_input_chars: 2000              # Truncate incoming text to this length before LLM call
+  max_output_chars: 3000             # Truncate LLM response to this length before returning
+
+
+# ── Endpoint Access Control ────────────────────────────────────────────────────
+# Configures which endpoints require a token and at which tier.
+# Paths support FastAPI-style {param} placeholders (e.g. /entities/{entity_id}).
+# Endpoints not listed here fall back to public access.
+protected_endpoints:
+
+  # Require at least a Private-tier token — all endpoints that serve actual data.
+  private_required:
+    - /greeting
+    - /categories
+    - /entities
+    - /entities/{entity_id}
+    - /entities/{entity_id}/related
+    - /category/{entity_flavor}
+    - /tags
+    - /tags/{tag_name}
+    - /search
+    - /graph
+    - /skills
+    - /skills/{skill_name}
+    - /technology
+    - /technology/{tech_name}
+    - /technologies
+    - /stages
+    - /stages/{entity_id}
+    - /oeuvre
+    - /oeuvre/{entity_id}
+    - /mcp/tools/call
+    - /mcp/resources/read
+    - /admin/rebuild
+    - /admin/translate
+
+  # Require an Elevated-tier token — all LLM-enabled Intelligence Hub endpoints.
+  elevated_required:
+    - /mcp/intelligence/simulate_interview
+    - /mcp/intelligence/market_relevance_check
+    - /mcp/intelligence/ask_profile_agent
+    - /mcp/intelligence/job_match
+
+categories:
+  identities: basic, links, contact # "people" to come
+  stages: education, job, projects, other
+  oeuvre: coding, article, book, talk, website, podcast, video, other
+
+
 # ── Your identity ────────────────────────────────────────────
 # fixed values, will be added to the generic endpoint
 # supports multi languages, e.g. identity.de.name → "name": "Nicky Reinert" in the German version of the profile

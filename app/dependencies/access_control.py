@@ -56,10 +56,12 @@ Log extra body args from a POST handler (one explicit call per protected POST)::
 
 from __future__ import annotations
 
+import fnmatch
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, HTTPException, Request
 
@@ -70,7 +72,39 @@ from db.models import get_db, DB_PATH
 
 STAGE_PUBLIC   = "public"
 STAGE_PRIVATE  = "private"
-STAGE_ELEVATED = "elevated"  # Reserved — hook in later when LLM features arrive
+STAGE_ELEVATED = "elevated"
+
+
+# ── Path-matching helpers ─────────────────────────────────────────────────────
+
+def _normalize_path_pattern(pattern: str) -> str:
+    """Convert FastAPI-style ``{param}`` placeholders to fnmatch wildcards."""
+    return re.sub(r"\{[^}]+\}", "*", pattern)
+
+
+def _path_matches_any(path: str, patterns: List[str]) -> bool:
+    """Return True if *path* matches any pattern in *patterns*."""
+    for pattern in patterns:
+        if fnmatch.fnmatch(path, _normalize_path_pattern(pattern)):
+            return True
+    return False
+
+
+def get_required_level(path: str, protected_config: dict) -> Optional[str]:
+    """
+    Determine the required access level for *path* from the
+    ``protected_endpoints`` block in config.yaml.
+
+    Returns:
+        ``STAGE_ELEVATED`` — path is in ``elevated_required`` list.
+        ``STAGE_PRIVATE``  — path is in ``private_required`` list.
+        ``None``           — not listed; no config-level restriction (public fallback).
+    """
+    if _path_matches_any(path, protected_config.get("elevated_required", [])):
+        return STAGE_ELEVATED
+    if _path_matches_any(path, protected_config.get("private_required", [])):
+        return STAGE_PRIVATE
+    return None
 
 
 # ── Data model ───────────────────────────────────────────────────────────────
@@ -311,3 +345,82 @@ def require_elevated_access(
             },
         )
     return token_info
+
+
+# ── Config-driven middleware guard ────────────────────────────────────────────
+
+def _forbidden_json(stage: str, message: str):
+    """Return a plain 403 JSONResponse (no exception raised)."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=403,
+        content={"detail": {"stage": stage, "message": message}},
+    )
+
+
+def build_endpoint_guard(protected_config: dict):
+    """
+    Build an async HTTP middleware function that enforces config-driven access
+    control based on the ``protected_endpoints`` block from config.yaml.
+
+    Behaviour
+    ---------
+    - Path in ``elevated_required`` → validates that a valid Elevated-tier token
+      is present; returns HTTP 403 otherwise.
+    - Path in ``private_required``  → validates any valid token; HTTP 403 if absent.
+    - Path not listed               → passes through (public, no config restriction).
+
+    Existing route-level dependencies (``require_private_access`` etc.) continue
+    to apply after this middleware; the guard acts as an early-exit layer only.
+
+    Usage in main.py::
+
+        guard = build_endpoint_guard(CONFIG.get("protected_endpoints", {}))
+
+        @app.middleware("http")
+        async def endpoint_protection_middleware(request, call_next):
+            return await guard(request, call_next)
+    """
+    async def _guard(request: Request, call_next):
+        path = request.url.path
+        required = get_required_level(path, protected_config)
+
+        # Not listed in config → no restriction from this layer
+        if required is None:
+            return await call_next(request)
+
+        raw_token = _extract_raw_token(request)
+        if not raw_token:
+            return _forbidden_json(
+                STAGE_PUBLIC,
+                (
+                    "Access Restricted: this endpoint requires a valid token. "
+                    "Provide it via 'Authorization: Bearer <token>' "
+                    "or the '?token=<token>' query parameter."
+                ),
+            )
+
+        conn = get_db(DB_PATH)
+        try:
+            token_info = _validate_token(conn, raw_token)
+        finally:
+            conn.close()
+
+        if not token_info:
+            return _forbidden_json(
+                STAGE_PUBLIC,
+                "Access Restricted: token is invalid, expired, or revoked.",
+            )
+
+        if required == STAGE_ELEVATED and token_info.stage != STAGE_ELEVATED:
+            return _forbidden_json(
+                token_info.stage,
+                (
+                    "Access Restricted: this endpoint requires an Elevated-tier token. "
+                    "Your current token has Private-tier access only."
+                ),
+            )
+
+        return await call_next(request)
+
+    return _guard

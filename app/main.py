@@ -89,7 +89,7 @@ from db.models import (
 
 from app.session_tracker import SessionTracker
 from app.routers import mcp
-from app.dependencies.access_control import require_private_access, TokenInfo
+from app.dependencies.access_control import require_private_access, TokenInfo, build_endpoint_guard
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +170,25 @@ app.add_middleware(
 
 # Include routers
 app.include_router(mcp.router)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT PROTECTION MIDDLEWARE  (config-driven, runs before session tracking)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_endpoint_guard = build_endpoint_guard(CONFIG.get("protected_endpoints", {}))
+
+
+@app.middleware("http")
+async def endpoint_protection_middleware(request: Request, call_next):
+    """
+    Config-driven access control gate.
+
+    Reads ``protected_endpoints`` from config.yaml and enforces the required
+    token tier for each listed path before any route handler or session-tracking
+    middleware runs. Unlisted paths pass through without restriction.
+    """
+    return await _endpoint_guard(request, call_next)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
