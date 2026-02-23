@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     max_output_chars        INTEGER              -- override: max output chars after LLM response
 );
 CREATE INDEX IF NOT EXISTS idx_tokens_value ON tokens(token_value);
-CREATE INDEX IF NOT EXISTS idx_tokens_tier  ON tokens(tier);
+-- NOTE: idx_tokens_tier is created in _migrate_columns (column may not exist yet on older DBs)
 
 -- ── Usage logs (all-stage request tracking) ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS usage_logs (
@@ -173,7 +173,6 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     endpoint_called TEXT NOT NULL,
     timestamp       TEXT NOT NULL,  -- ISO-8601 datetime (UTC)
     input_args      TEXT,           -- JSON-encoded query params / body args
-    -- Intelligence hub extension (NULL for non-LLM calls)
     tier            TEXT,           -- private | elevated (caller's tier at time of call)
     api_provider    TEXT,           -- groq | perplexity (NULL for standard calls)
     input_length    INTEGER,        -- character count of the raw input sent
@@ -182,8 +181,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_token        ON usage_logs(token_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp    ON usage_logs(timestamp);
-CREATE INDEX IF NOT EXISTS idx_usage_provider     ON usage_logs(api_provider);
-CREATE INDEX IF NOT EXISTS idx_usage_date_token   ON usage_logs(token_id, timestamp);
+-- Indexes on new columns are created in _migrate_columns (safe for existing DBs)
 """
 
 
@@ -225,12 +223,16 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         "ALTER TABLE usage_logs ADD COLUMN input_length INTEGER",
         "ALTER TABLE usage_logs ADD COLUMN input_text TEXT",
         "ALTER TABLE usage_logs ADD COLUMN tokens_used INTEGER",
+        # Indexes on new columns — must run AFTER columns exist
+        "CREATE INDEX IF NOT EXISTS idx_tokens_tier        ON tokens(tier)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_provider     ON usage_logs(api_provider)",
+        "CREATE INDEX IF NOT EXISTS idx_usage_date_token   ON usage_logs(token_id, timestamp)",
     ]
     for stmt in migrations:
         try:
             conn.execute(stmt)
         except Exception:
-            pass  # Column already exists — skip silently
+            pass  # Column/index already exists — skip silently
 
 
 # --- ENTITY CRUD ---
