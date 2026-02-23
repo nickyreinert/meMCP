@@ -198,8 +198,9 @@ def get_db(path: Path = DB_PATH) -> sqlite3.Connection:
 def init_db(path: Path = DB_PATH):
     """Initialize database schema and run any pending column migrations."""
     conn = get_db(path)
-    # Migrations run FIRST so that SCHEMA index creation never references
-    # a column that doesn't exist yet on an existing database.
+
+    # Run column migrations FIRST so that executescript(SCHEMA) never tries
+    # to CREATE INDEX on a column that doesn't exist yet in an existing DB.
     _migrate_columns(conn)
     conn.executescript(SCHEMA)
     conn.commit()
