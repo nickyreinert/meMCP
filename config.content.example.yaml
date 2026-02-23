@@ -1,0 +1,131 @@
+# ============================================================
+# personal-mcp — config.content.yaml
+# Your personal data sources and content settings.
+# Copy to config.content.yaml and customise for yourself.
+# ============================================================
+
+# ── Your identity ────────────────────────────────────────────
+# Fixed values added to the /greeting endpoint.
+# Supports multiple languages: each sub-key appears in the JSON output.
+identity:
+  de:
+    name: Your Name
+    tagline: "What you do in one line"
+    location: City, Country
+    github_url: https://github.com/yourhandle
+    medium_url: https://yourhandle.medium.com
+    blog_url: https://yourblog.com
+    linkedin_url: https://www.linkedin.com/in/yourhandle
+    description: "German description of yourself."
+  en:
+    name: Your Name
+    tagline: "What you do in one line"
+    location: City, Country
+    github_url: https://github.com/yourhandle
+    medium_url: https://yourhandle.medium.com
+    blog_url: https://yourblog.com
+    linkedin_url: https://www.linkedin.com/in/yourhandle
+    description: "English description of yourself."
+
+# ── Stages (WHERE you worked/studied) ──────────────────────────
+# Stages are companies, institutions, professional roles, education.
+#
+# Workflow:
+#   1. First run: parses PDF via LLM → creates <url>.yaml cache
+#   2. Edit the .yaml cache manually to refine content
+#   3. Subsequent runs: loads from .yaml (fast, no LLM needed)
+#   4. Set enabled: false to skip stages entirely
+stages:
+  enabled: true
+  connector: linkedin_pdf
+  url: file://data/linkedin_profile.pdf   # LinkedIn export PDF (relative to project root)
+  llm-processing: true
+
+# ── Oeuvre (WHAT you built / wrote / presented) ─────────────────
+# Each named key is an independent source. Names must be unique.
+# connector options: github_api | medium_raw | manual | sitemap | rss
+oeuvre:
+
+  github:
+    enabled: true
+    connector: github_api
+    url: https://api.github.com/users/yourhandle/repos
+    sub_type_override: coding   # coding | blog_post | article | book | website | podcast | video
+    limit: 0                    # 0 = all; otherwise max repos to fetch
+    llm-processing: true
+    fetch_readmes: true         # richer descriptions, slower
+
+  medium_init:
+    # Initial fetch: copy the HTML of your Medium story list page into a file.
+    enabled: false
+    connector: medium_raw
+    url: file://data/Medium.html
+
+  medium:
+    enabled: true
+    connector: manual
+    url: https://yourhandle.medium.com/
+    sub_type_override: article
+    limit: 0
+    cache_ttl_hours: 168        # 7 days
+    llm-processing: true
+
+    connector-setup:
+      post_url_selector: 'a[href*="medium.com/@yourhandle"]'
+      post-title-selector: 'h1'
+      post-content-selector: 'article'
+      post-published-date-selector: 'meta[property="article:published_time"]'
+      post-description-selector: 'meta[property="og:description"]'
+
+  blog_1:
+    enabled: true
+    connector: rss
+    url: https://yourblog.com/index.xml
+    sub_type_override: blog_post
+    llm-processing: true
+    limit: 0
+
+  # Example: Sitemap connector (multi-entity — each page = separate entity)
+  # blog_sitemap_pages:
+  #   enabled: false
+  #   connector: sitemap
+  #   url: https://example.com/sitemap.xml
+  #   sub_type_override: blog_post
+  #   limit: 20
+  #   cache_ttl_hours: 336
+  #   llm-processing: true
+  #   single-entity: false
+  #   cache-file: file://data/blog_sitemap.yaml
+  #
+  #   connector-setup:
+  #     post-title-selector: h1
+  #     post-content-selector: article
+  #     post-published-date-selector: 'time[datetime]'
+  #     post-description-selector: 'meta[name="description"]'
+
+  # Example: Sitemap connector (single-entity — whole site = one entity)
+  # project_website:
+  #   enabled: false
+  #   connector: sitemap
+  #   url: https://example.com/sitemap.xml
+  #   sub_type_override: website
+  #   llm-processing: true
+  #   single-entity: true
+  #   cache-file: file://data/project_sitemap.yaml
+  #
+  #   connector-setup:
+  #     post-title-selector: h1
+  #     post-content-selector: main
+  #     post-description-selector: 'meta[name="description"]'
+
+# ── Internationalization (i18n) ──────────────────────────────────────────────
+# target_languages: languages to auto-translate dynamic content into.
+# Run: python -m llm.translator   or   POST /admin/translate
+#
+# batch_sleep_seconds: pause between LLM calls (GROQ free tier: ~30 req/min).
+# A full German translation of ~200 entities takes roughly 3-5 minutes.
+i18n:
+  target_languages:
+    - de
+    - en
+  batch_sleep_seconds: 0.4

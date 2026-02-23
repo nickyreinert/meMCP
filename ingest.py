@@ -16,9 +16,14 @@ warnings.filterwarnings('ignore', category=Warning, module='urllib3')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log = logging.getLogger("mcp.ingest")
 
-def load_config(path: str = "config.yaml"):
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+def load_config(path: str = None):
+    from config_loader import load_config as _load
+    if path and path != "config.yaml":
+        # explicit legacy path — fall back to direct load
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f)
+    return _load()
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest data from configured sources.")

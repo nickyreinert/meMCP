@@ -43,9 +43,12 @@ from llm.enricher import LLMEnricher
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_cfg(path: str = "config.yaml") -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+def load_cfg(path: str = None) -> dict:
+    from config_loader import load_config as _load
+    if path and path != "config.yaml":
+        with open(path) as f:
+            return yaml.safe_load(f)
+    return _load()
 
 
 def model_label(enricher: LLMEnricher) -> str:
@@ -249,7 +252,8 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser(description="Personal MCP — Bulk Translator")
-    parser.add_argument("--config",           default="config.yaml")
+    parser.add_argument("--config",           default=None,
+                        help="Path to a single config YAML (default: auto-merge config.tech.yaml + config.content.yaml)")
     parser.add_argument("--lang",             default=None,
                         help="Target language code, e.g. de (default: all configured)")
     parser.add_argument("--entity-id",        default=None,

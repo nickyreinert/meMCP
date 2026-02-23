@@ -97,10 +97,9 @@ from app.dependencies.access_control import require_private_access, TokenInfo, b
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_config():
-    """Load config.yaml from project root."""
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+    """Load and merge config.tech.yaml + config.content.yaml from project root."""
+    from config_loader import load_config as _load
+    return _load(root=Path(__file__).parent.parent)
 
 def load_prompts():
     """Load prompts.yaml from project root."""
@@ -1238,7 +1237,7 @@ async def entity_related(
     entity_id: str,
     conn=Depends(db),
     rel_type: Optional[str]        = Query(None, description="Filter by relation type"),
-    direction: str                  = Query("both", regex="^(in|out|both)$"),
+    direction: str                  = Query("both", pattern="^(in|out|both)$"),
     lang: Optional[str]            = Query(None),
     accept_language: Optional[str] = Header(None, alias="Accept-Language"),
 ):

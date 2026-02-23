@@ -3,7 +3,7 @@ connectors/proxy/proxy.py — Chat Proxy
 =======================================
 
 A FastAPI service (port 8001) that bridges chat platforms to meMCP via
-LLM tool-calling (Groq or Ollama, configured via config.yaml).
+LLM tool-calling (Groq or Ollama, configured via config.tech.yaml).
 
 Bot adapters (Telegram, Slack, Discord) are intentionally dumb — they just
 POST { chat_id, message } here and forward the reply back to the user.
@@ -32,13 +32,13 @@ Endpoints
   POST /chat   { "chat_id": str, "message": str } → { "reply": str, "state": str }
   GET  /health                                     → { "status": str, ... }
 
-Config (config.yaml → chat: section)
--------------------------------------
+Config (config.tech.yaml → chat: section)
+------------------------------------------
   host:                 groq | ollama
   model:                model name
   ollama_url:           Ollama base URL    (default http://localhost:11434)
-  memcp_url:            meMCP base URL     (default http://localhost:8000)
   db_path:              SQLite path        (default data/proxy.db)
+  # meMCP URL is derived from server.port; override via MEMCP_URL env var
   rate_limit_per_minute: max msgs/chat_id  (default 20)
   max_history:          conversation turns (default 10)
   max_input_chars / max_output_chars: truncation limits
@@ -78,22 +78,23 @@ logger = logging.getLogger(__name__)
 
 # ── Config loader ─────────────────────────────────────────────────────────────
 
-def _load_chat_config() -> dict:
+def _load_tech_config() -> dict:
+    """Load config.tech.yaml, searching common locations."""
     candidates = [
         os.getenv("CONFIG_PATH"),
-        "/config/config.yaml",
-        str(Path(__file__).parent.parent.parent / "config.yaml"),
+        "/config/config.tech.yaml",
+        str(Path(__file__).parent.parent.parent / "config.tech.yaml"),
     ]
     for path in candidates:
         if path and Path(path).exists():
             with open(path) as fh:
-                cfg = yaml.safe_load(fh)
-            return cfg.get("chat", {})
-    logger.warning("config.yaml not found — using defaults for chat section")
+                return yaml.safe_load(fh) or {}
+    logger.warning("config.tech.yaml not found — using defaults")
     return {}
 
 
-_CFG = _load_chat_config()
+_TECH_CFG = _load_tech_config()
+_CFG      = _TECH_CFG.get("chat", {})
 
 LLM_HOST    = _CFG.get("host", "groq")
 LLM_MODEL   = _CFG.get("model", "llama-3.3-70b-versatile")
@@ -104,8 +105,10 @@ MAX_OUT     = int(_CFG.get("max_output_chars", 3000))
 RATE_LIMIT  = int(_CFG.get("rate_limit_per_minute", 20))
 MAX_ROUNDS  = 5
 
-# Env vars override config values for deployment flexibility
-MEMCP_URL    = (os.getenv("MEMCP_URL") or _CFG.get("memcp_url", "http://localhost:8000")).rstrip("/")
+# MEMCP_URL: derived from server.port so there's no duplication in config.
+# Override at runtime via MEMCP_URL env var for non-local deployments.
+_server_port = _TECH_CFG.get("server", {}).get("port", 8000)
+MEMCP_URL    = (os.getenv("MEMCP_URL") or f"http://localhost:{_server_port}").rstrip("/")
 DB_PATH      = os.getenv("PROXY_DB_PATH") or _CFG.get("db_path", "data/proxy.db")
 GROQ_KEY     = os.getenv("GROQ_API_KEY", "")
 PROXY_SECRET = os.getenv("PROXY_SECRET", "")

@@ -43,10 +43,11 @@ import yaml
 # --- CONFIGURATION LOADING ---
 
 def load_metrics_config() -> dict:
-    """Load metrics configuration from config.yaml."""
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    """Load metrics configuration from config.tech.yaml."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from config_loader import load_config
+    config = load_config(root=Path(__file__).parent.parent)
     return config.get("metrics", {})
 
 

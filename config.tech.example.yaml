@@ -1,0 +1,200 @@
+# ============================================================
+# personal-mcp — config.tech.yaml
+# Infrastructure, server, and algorithmic settings.
+# Copy to config.tech.yaml and adjust for your deployment.
+# ============================================================
+
+# ── Server ──────────────────────────────────────────────────
+server:
+  host: 0.0.0.0
+  port: 8000
+  base_url: http://localhost:8000   # public-facing URL (used in links / MCP metadata)
+
+# ── Storage ─────────────────────────────────────────────────
+db_path: db/profile.db
+cache_dir: .cache
+cache_ttl_hours: 6
+watch_interval_minutes: 120
+
+# Auto-export entities to YAML after ingestion (for manual editing workflow)
+auto_export_yaml: true
+
+# ── Session Tracking & Coverage Monitoring ─────────────────
+#
+# Tracks API client sessions to help LLM agents explore systematically.
+# Features: anonymized logging, unique visitor IDs, SQLite persistence,
+# coverage tracking with pagination awareness, X-Coverage-* response headers.
+#
+# Session reset: visiting root (/) resets the session.
+# Sessions auto-expire after timeout_hours.
+session:
+  enabled: true
+  timeout_hours: 5              # Session expiry (hours)
+  log_file: logs/api_access.log
+  track_coverage: true
+  db_path: db/sessions.db
+
+  # Relevant endpoints for coverage tracking (format: path: {paginated: bool})
+  relevant_endpoints:
+    /greeting: {paginated: false}
+    /stages: {paginated: true}
+    /stages/{id}: {paginated: false}
+    /oeuvre: {paginated: true}
+    /oeuvre/{id}: {paginated: false}
+    /skills: {paginated: true}
+    /skills/{name}: {paginated: false}
+    /technology: {paginated: true}
+    /technology/{name}: {paginated: false}
+    /tags/{tag_name}: {paginated: false}
+
+# ── LLM Enrichment ──────────────────────────────────────────
+# Used during data ingestion and translation.
+# backend: groq | ollama | none
+#
+# GROQ (recommended: fast, free tier, ~100 calls/day free):
+#   pip install groq && export GROQ_API_KEY=gsk_...
+#   models: llama3-8b-8192 (fast) | llama3-70b-8192 (smart) | mixtral-8x7b-32768
+#
+# Ollama (fully local, zero API cost, privacy-first):
+#   brew install ollama && ollama serve && ollama pull llama3
+#   models: llama3 | mistral | phi3 | gemma2 | qwen2
+#
+llm:
+  backend: ollama
+  model: mistral-small:24b-instruct-2501-q4_K_M
+  groq_api_key: ""          # or set GROQ_API_KEY env var
+  ollama_url: http://localhost:11434
+
+  shrink_text: false
+  shrink_skip_chars: 3
+
+# ── Chat Proxy ────────────────────────────────────────────────────────────────
+# Powers the conversational interface (Telegram / Slack / Discord bots).
+# host: groq | ollama
+#
+# memcp_url is derived automatically from server.port (http://localhost:<port>).
+# Override at runtime via the MEMCP_URL environment variable if needed.
+chat:
+  host: groq
+  model: llama-3.3-70b-versatile
+  ollama_url: http://localhost:11434  # used when host: ollama
+
+  db_path: data/proxy.db
+
+  # Rate limiting (per chat_id, sliding 60-second window)
+  rate_limit_per_minute: 20
+
+  # Conversation memory
+  max_history: 10                    # conversation turns kept per session
+
+  # Truncation
+  max_input_chars: 2000              # truncate incoming text before sending to LLM
+  max_output_chars: 3000             # truncate LLM response before returning
+
+# ── Endpoint Access Control ────────────────────────────────────────────────────
+# Configures which endpoints require a token and at which tier.
+# Paths support FastAPI-style {param} placeholders (e.g. /entities/{entity_id}).
+# Endpoints not listed here fall back to public access.
+protected_endpoints:
+
+  # Require at least a Private-tier token — all endpoints that serve actual data.
+  private_required:
+    - /greeting
+    - /categories
+    - /entities
+    - /entities/{entity_id}
+    - /entities/{entity_id}/related
+    - /category/{entity_flavor}
+    - /tags
+    - /tags/{tag_name}
+    - /search
+    - /graph
+    - /skills
+    - /skills/{skill_name}
+    - /technology
+    - /technology/{tech_name}
+    - /technologies
+    - /stages
+    - /stages/{entity_id}
+    - /oeuvre
+    - /oeuvre/{entity_id}
+    - /mcp/tools/call
+    - /mcp/resources/read
+    - /admin/rebuild
+    - /admin/translate
+
+# ── Tag Metrics Configuration ──────────────────────────────────────────────
+# Customizable formulas and weights for calculating skill/technology/tag metrics.
+# Increment version whenever you change formulas to trigger recalculation.
+metrics:
+  enabled: true
+  version: "1.2"
+
+  # Context weights: differentiate "worked with it" vs "wrote about it"
+  context_weights:
+    default_weight: 0.5
+    stages:
+      job: 1.0              # Actual work experience (full weight)
+      education: 0.85       # Formal learning
+      achievement: 0.7      # Certification/achievement
+      other: 0.8
+    oeuvre:
+      coding: 1.0           # Built something with it
+      talk: 0.6             # Presented on it
+      article: 0.3          # Wrote article about it
+      blog_post: 0.3
+      book: 0.7
+      podcast: 0.5
+      video: 0.5
+      website: 0.6
+      other: 0.5
+
+  # Proficiency: expertise level (0-100) based on recency and duration
+  proficiency:
+    recency_weight: 0.6
+    duration_weight: 0.4
+    recency_decay_halflife: 3.0
+    min_score: 5.0
+    default_oeuvre_duration_years: 0.5
+    duration_score_multiplier: 15.0
+
+  # Experience years: total time spent (weighted by intensity)
+  experience_years:
+    deduplicate_overlaps: true
+    current_bonus_multiplier: 1.2
+
+  # Frequency: how often tag appears relative to all entities
+  frequency:
+    min_threshold: 3
+
+  # Diversity: variety of contexts (flavors, categories)
+  diversity:
+    flavor_weight: 0.5
+    category_weight: 0.5
+    saturation_threshold: 10
+
+  # Growth trend: usage pattern over time
+  growth:
+    min_timespan_years: 1.0
+    min_entity_count: 3
+    increasing_threshold: 0.5
+    decreasing_threshold: -0.3
+
+  # Relevance: composite score combining all metrics (0-100)
+  relevance:
+    weights:
+      proficiency: 0.30
+      frequency: 0.20
+      recency: 0.20
+      diversity: 0.15
+      experience: 0.10
+      growth: 0.05
+    current_bonus: 10
+    stale_penalty: 15
+    stale_threshold_years: 5
+    recency_decay_halflife: 3.0
+    experience_score_multiplier: 10.0
+    growth_scores:
+      increasing: 100.0
+      stable: 50.0
+      decreasing: 0.0

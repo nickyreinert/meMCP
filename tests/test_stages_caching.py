@@ -44,8 +44,10 @@ def test_yaml_cache_structure():
 
 def test_config_structure():
     """Test that config has new structure."""
-    with open("config.yaml") as f:
-        config = yaml.safe_load(f)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from config_loader import load_config
+    config = load_config()
     
     stages = config.get("stages", {})
     
