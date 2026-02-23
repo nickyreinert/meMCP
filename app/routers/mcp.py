@@ -381,14 +381,17 @@ async def read_mcp_resource(
     # Find matching resource definition
     resources = get_resource_definitions()
     resource = next((r for r in resources if r["uri"] == uri), None)
-    
+
     if not resource:
         available_uris = [r["uri"] for r in resources]
         raise HTTPException(
             404,
             f"Unknown resource URI '{uri}'. Available: {', '.join(available_uris)}"
         )
-    
+
+    # Log the access (uri + lang captured as input args)
+    log_usage(conn, token_info.id, request.url.path, {"uri": uri, "lang": lang})
+
     # Import main app to access route handlers and query functions
     try:
         from db.models import (
