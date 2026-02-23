@@ -1,0 +1,2 @@
+slack-bolt==1.21.3
+httpx==0.28.1

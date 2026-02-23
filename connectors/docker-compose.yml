@@ -36,5 +36,41 @@ services:
       timeout: 10s
       retries: 3
 
+  telegram:
+    build: ./telegram
+    container_name: memcp-telegram
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PROXY_URL=http://proxy:8001
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+  slack:
+    build: ./slack
+    container_name: memcp-slack
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PROXY_URL=http://proxy:8001
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+  discord:
+    build: ./discord
+    container_name: memcp-discord
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PROXY_URL=http://proxy:8001
+    depends_on:
+      proxy:
+        condition: service_healthy
+
 volumes:
   proxy_data:
