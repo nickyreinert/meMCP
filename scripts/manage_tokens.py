@@ -392,6 +392,89 @@ def cmd_stats(args):
 
         print()
 
+    elif args.owner:
+        # ── Owner view: all tokens + combined chronological log ───────────────
+        tokens = conn.execute(
+            "SELECT id, owner_name, is_active, expires_at, tier "
+            "FROM tokens WHERE owner_name = ? ORDER BY id",
+            (args.owner,),
+        ).fetchall()
+
+        if not tokens:
+            conn.close()
+            sys.exit(f"No tokens found for owner '{args.owner}'.")
+
+        token_ids = [t["id"] for t in tokens]
+        placeholders = ",".join("?" * len(token_ids))
+
+        logs = conn.execute(
+            f"""
+            SELECT u.token_id, u.endpoint_called, u.timestamp, u.input_args,
+                   u.api_provider, u.input_text, u.tokens_used,
+                   t.tier
+            FROM usage_logs u
+            JOIN tokens t ON t.id = u.token_id
+            WHERE u.token_id IN ({placeholders})
+            ORDER BY u.timestamp DESC
+            LIMIT 100
+            """,
+            token_ids,
+        ).fetchall()
+        conn.close()
+
+        print()
+        print(_bold(f"  Access log for owner: {args.owner}"))
+        print()
+        print(_bold(f"  Token(s):"))
+        for t in tokens:
+            tier_str = _cyan(t["tier"] or "private")
+            print(f"    #{t['id']}  {_status_label(t)}  tier={tier_str}  expires={t['expires_at'][:10]}")
+
+        print()
+        print(f"  Total accesses in log: {len(logs)}")
+        print()
+
+        if not logs:
+            print(_dim("  No usage logged yet.\n"))
+            return
+
+        # Endpoint frequency
+        freq: dict[str, int] = {}
+        for log in logs:
+            ep = log["endpoint_called"]
+            freq[ep] = freq.get(ep, 0) + 1
+
+        print(_bold("  Endpoint breakdown:"))
+        for ep, count in sorted(freq.items(), key=lambda x: -x[1]):
+            print(f"    {count:>4}×  {ep}")
+
+        print()
+        print(_bold(f"  Last {min(len(logs), 50)} accesses (newest first):"))
+        print(f"  {'Timestamp':<20}  {'Token':<7}  {'Tier':<10}  {'Endpoint':<35}  Input")
+        print("  " + "─" * 100)
+
+        for log in logs[:50]:
+            ts       = log["timestamp"][:19].replace("T", " ")
+            ep       = log["endpoint_called"]
+            tok_id   = f"#{log['token_id']}"
+            tier_str = log["tier"] or "private"
+            provider = f"[{log['api_provider']}]" if log["api_provider"] else ""
+            input_raw = log["input_text"] or log["input_args"] or ""
+            if input_raw:
+                try:
+                    parsed = json.loads(input_raw) if input_raw.startswith("{") else None
+                    input_str = json.dumps(parsed, ensure_ascii=False) if parsed else str(input_raw)
+                    if len(input_str) > 40:
+                        input_str = input_str[:37] + "…"
+                except Exception:
+                    input_str = str(input_raw)[:40]
+            else:
+                input_str = _dim("—")
+            ep_display = f"{ep} {provider}".strip()
+            print(f"  {ts:<20}  {tok_id:<7}  {tier_str:<10}  {ep_display:<35}  {input_str}")
+
+        print()
+
     else:
         # All tokens summary
         rows = conn.execute(
@@ -537,6 +620,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats.add_argument(
         "--id", type=int, metavar="ID",
         help="Show stats for a specific token (omit for all-token summary)",
+    )
+    p_stats.add_argument(
+        "--owner", metavar="NAME",
+        help="Show detailed access log for all tokens belonging to this owner",
     )
 
     return p
