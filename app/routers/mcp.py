@@ -389,9 +389,6 @@ async def read_mcp_resource(
             f"Unknown resource URI '{uri}'. Available: {', '.join(available_uris)}"
         )
 
-    # Log the access (uri + lang captured as input args)
-    log_usage(conn, token_info.id, request.url.path, {"uri": uri, "lang": lang})
-
     # Import main app to access route handlers and query functions
     try:
         from db.models import (
