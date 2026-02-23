@@ -10,6 +10,14 @@ import logging
 import os
 from datetime import datetime
 
+# Import access control functions
+from admin.dependencies.access_control import (
+    create_admin_token, 
+    get_token_by_id, 
+    revoke_token_by_id,
+    list_active_tokens
+)
+
 # Initialize logging
 logger = logging.getLogger(__name__)
 
@@ -123,26 +131,72 @@ async def create_token():
     Create new access token
     
     Purpose: Generate a new access token for API access
-    Input: None (token generation logic to be implemented)
-    Output: Newly created token
+    Input: None
+    Output: Newly created token with metadata
     Process:
-        1. Generate new token
-        2. Store token
-        3. Return token info
-    Dependencies: Token generation logic
+        1. Generate new token using access control
+        2. Store token information
+        3. Return token details
+    Dependencies: create_admin_token()
     """
-    logger.info("Creating new access token")
+    logger.info("Creating new access token via API")
     
-    # TODO: Implement actual token generation logic
-    # This is a placeholder implementation
-    token = "placeholder_token_12345"
+    try:
+        # Create token for admin user
+        token, token_id = create_admin_token("admin_user")  # Default admin user
+        
+        token_info = get_token_by_id(token_id)
+        if not token_info:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve token information"
+            )
+        
+        logger.info(f"Created new token via API with ID: {token_id}")
+        return {
+            "token_id": token_id,
+            "token": token,
+            "user": token_info["user"],
+            "created_at": token_info["created_at"].isoformat(),
+            "expires_at": token_info["expires_at"].isoformat(),
+            "status": "active"
+        }
+    except Exception as e:
+        logger.error(f"Failed to create token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create token: {str(e)}"
+        )
+
+@router.get("/tokens")
+async def list_tokens():
+    """
+    List all active tokens
     
-    logger.info(f"Created new token: {token}")
-    return {
-        "token": token,
-        "created_at": datetime.now().isoformat(),
-        "expires_at": None  # TODO: Implement expiration
-    }
+    Purpose: Retrieve information about currently active access tokens
+    Input: None
+    Output: List of active token information
+    Process:
+        1. Get list of active tokens
+        2. Return token information
+    Dependencies: list_active_tokens()
+    """
+    logger.info("Listing active tokens via API")
+    
+    try:
+        active_tokens = list_active_tokens()
+        logger.info(f"Returning {len(active_tokens)} active tokens")
+        return {
+            "tokens": active_tokens,
+            "count": len(active_tokens),
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Failed to list tokens: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list tokens: {str(e)}"
+        )
 
 @router.delete("/tokens/{token_id}")
 async def revoke_token(token_id: str):
@@ -151,23 +205,48 @@ async def revoke_token(token_id: str):
     
     Purpose: Invalidate an existing access token
     Input: token_id - ID of the token to revoke
-    Output: Confirmation message
+    Output: Confirmation message with token status
     Process:
         1. Validate token exists
-        2. Invalidate token
-        3. Return confirmation
-    Dependencies: Token storage logic
+        2. Invalidate token using access control
+        3. Return confirmation with details
+    Dependencies: revoke_token_by_id(), get_token_by_id()
     """
-    logger.info(f"Revoking token: {token_id}")
+    logger.info(f"Revoking token via API: {token_id}")
     
-    # TODO: Implement actual token revocation logic
-    # This is a placeholder implementation
-    
-    logger.info(f"Successfully revoked token: {token_id}")
-    return {
-        "message": f"Token {token_id} revoked successfully",
-        "status": "success"
-    }
+    try:
+        # Check if token exists
+        token_info = get_token_by_id(token_id)
+        if not token_info:
+            logger.warning(f"Attempt to revoke non-existent token: {token_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Token {token_id} not found"
+            )
+        
+        # Revoke the token
+        success = revoke_token_by_id(token_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to revoke token {token_id}"
+            )
+        
+        logger.info(f"Successfully revoked token via API: {token_id}")
+        return {
+            "message": f"Token {token_id} revoked successfully",
+            "token_id": token_id,
+            "user": token_info["user"],
+            "status": "success"
+        }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        logger.error(f"Failed to revoke token {token_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to revoke token: {str(e)}"
+        )
 
 # --- DATABASE BROWSER ENDPOINTS ---
 

@@ -18,6 +18,9 @@ SECRET_KEY = "your-secret-key-here"  # TODO: Move to environment variables
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
+# In-memory token storage (replace with database in production)
+_active_tokens = {}
+
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="admin/token")
 
@@ -36,6 +39,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         1. Copy input data
         2. Set expiration time
         3. Encode with secret key
+        4. Store token for management
     Dependencies: None
     """
     logger.info("Creating new access token")
@@ -49,8 +53,18 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     
-    logger.info("Access token created successfully")
-    return encoded_jwt
+    # Store token for management
+    token_id = str(len(_active_tokens) + 1)
+    _active_tokens[token_id] = {
+        "token": encoded_jwt,
+        "user": data.get("sub"),
+        "created_at": datetime.utcnow(),
+        "expires_at": expire,
+        "active": True
+    }
+    
+    logger.info(f"Access token created successfully with ID: {token_id}")
+    return encoded_jwt, token_id
 
 def verify_token(token: str):
     """
@@ -149,11 +163,12 @@ def create_admin_token(username: str):
     
     Purpose: Generate a JWT token specifically for admin users
     Input: username - Admin username
-    Output: JWT token string
+    Output: Tuple of (JWT token string, token_id)
     Process:
         1. Create token payload with admin role
         2. Set expiration
         3. Generate token
+        4. Store token for management
     Dependencies: create_access_token()
     """
     logger.info(f"Creating admin token for user: {username}")
@@ -165,6 +180,71 @@ def create_admin_token(username: str):
         "permissions": ["all"]  # Full permissions for admin
     }
     
-    token = create_access_token(token_data, access_token_expires)
-    logger.info(f"Admin token created for user: {username}")
-    return token
+    token, token_id = create_access_token(token_data, access_token_expires)
+    logger.info(f"Admin token created for user: {username} with ID: {token_id}")
+    return token, token_id
+
+def get_token_by_id(token_id: str):
+    """
+    Get token information by ID
+    
+    Purpose: Retrieve stored token data
+    Input: token_id - Token identifier
+    Output: Token data dictionary or None
+    Process:
+        1. Look up token in storage
+        2. Return token data if found
+    Dependencies: None
+    """
+    logger.info(f"Retrieving token information for ID: {token_id}")
+    return _active_tokens.get(token_id)
+
+def revoke_token_by_id(token_id: str):
+    """
+    Revoke token by ID
+    
+    Purpose: Invalidate an existing token
+    Input: token_id - Token identifier
+    Output: Boolean indicating success
+    Process:
+        1. Check if token exists
+        2. Mark token as inactive
+        3. Return success status
+    Dependencies: None
+    """
+    logger.info(f"Revoking token with ID: {token_id}")
+    
+    if token_id in _active_tokens:
+        _active_tokens[token_id]["active"] = False
+        logger.info(f"Token {token_id} revoked successfully")
+        return True
+    
+    logger.warning(f"Attempt to revoke non-existent token: {token_id}")
+    return False
+
+def list_active_tokens():
+    """
+    List all active tokens
+    
+    Purpose: Get information about currently active tokens
+    Input: None
+    Output: List of active token information
+    Process:
+        1. Filter active tokens
+        2. Return token list
+    Dependencies: None
+    """
+    logger.info("Listing active tokens")
+    
+    active_tokens = []
+    for token_id, token_data in _active_tokens.items():
+        if token_data["active"]:
+            active_tokens.append({
+                "token_id": token_id,
+                "user": token_data["user"],
+                "created_at": token_data["created_at"].isoformat(),
+                "expires_at": token_data["expires_at"].isoformat()
+            })
+    
+    logger.info(f"Found {len(active_tokens)} active tokens")
+    return active_tokens
