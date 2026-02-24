@@ -263,16 +263,73 @@ def _truncate(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars - 1] + "…"
 
 
-async def _verify_token(token: str) -> bool:
+async def _verify_token(token: str) -> dict | None:
+    """
+    Verify a token via /token/info and check it's a 'chat'-tier token.
+
+    Returns the token info dict on success, None on failure.
+    """
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.get(
-                f"{MEMCP_URL}/greeting",
+                f"{MEMCP_URL}/token/info",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            return resp.status_code == 200
+            if resp.status_code != 200:
+                return None
+            data = resp.json().get("data", {})
+            tier = data.get("tier", "")
+            # Accept both 'chat' (correct) and 'mcp' (backward compat during transition)
+            if tier not in ("chat", "mcp"):
+                return None
+            return data
     except Exception:
-        return False
+        return None
+
+
+async def _derive_token(chat_token: str, chat_id: str) -> str | None:
+    """
+    Call the meMCP internal endpoint to create a short-lived derived token
+    for MCP API calls. Returns the raw derived token or None on failure.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.post(
+                f"{MEMCP_URL}/internal/tokens/derive",
+                headers={
+                    "X-Proxy-Secret": PROXY_SECRET,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "parent_token": chat_token,
+                    "scope": "mcp_read",
+                    "ttl_minutes": 60,
+                    "chat_id": chat_id,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning("Failed to derive token: %s %s", resp.status_code, resp.text[:200])
+                return None
+            return resp.json().get("derived_token")
+    except Exception as exc:
+        logger.warning("Derive token error: %s", exc)
+        return None
+
+
+async def _revoke_derived_token(derived_token: str) -> None:
+    """Revoke a derived token when disconnecting."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{MEMCP_URL}/internal/tokens/revoke",
+                headers={
+                    "X-Proxy-Secret": PROXY_SECRET,
+                    "Content-Type": "application/json",
+                },
+                json={"derived_token": derived_token},
+            )
+    except Exception as exc:
+        logger.debug("Revoke derived token error (non-critical): %s", exc)
 
 
 async def _call_tool(token: str, tool_name: str, arguments: dict) -> dict:
@@ -342,6 +399,9 @@ async def _handle_message(chat_id: str, message: str) -> tuple[str, str]:
     session = auth.get_session(chat_id)
 
     if msg == "/disconnect":
+        # Revoke derived token before clearing session
+        if session and session.get("token"):
+            await _revoke_derived_token(session["token"])
         auth.clear_session(chat_id)
         return DISCONNECT, "needs_token"
 
@@ -355,10 +415,19 @@ async def _handle_message(chat_id: str, message: str) -> tuple[str, str]:
         return WELCOME, "awaiting_token"
 
     if session["state"] == "awaiting_token":
-        valid = await _verify_token(msg)
-        if valid:
-            auth.upsert_session(chat_id, token=msg, state="active", history=[])
-            return TOKEN_OK, "active"
+        token_data = await _verify_token(msg)
+        if token_data:
+            # Token verified — now derive a scoped MCP token for API calls
+            derived = await _derive_token(msg, chat_id)
+            if derived:
+                # Store the derived token (not the original chat token)
+                auth.upsert_session(chat_id, token=derived, state="active", history=[])
+                return TOKEN_OK, "active"
+            else:
+                # Derivation failed — fall back to using the chat token directly
+                logger.warning("Token derivation failed for %s — using chat token directly", chat_id)
+                auth.upsert_session(chat_id, token=msg, state="active", history=[])
+                return TOKEN_OK, "active"
         return TOKEN_BAD, "awaiting_token"
 
     try:

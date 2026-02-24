@@ -88,7 +88,7 @@ from db.models import (
 )
 
 from app.session_tracker import SessionTracker
-from app.routers import mcp
+from app.routers import mcp, internal
 from app.dependencies.access_control import require_private_access, TokenInfo, build_endpoint_guard
 
 
@@ -139,7 +139,18 @@ else:
 # APP SETUP
 # ─────────────────────────────────────────────────────────────────────────────
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+def _rate_limit_key(request: Request) -> str:
+    """Use token hash as rate limit key for authenticated requests, IP otherwise."""
+    import hashlib
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):].strip()
+        if token:
+            return f"token:{hashlib.sha256(token.encode()).hexdigest()[:16]}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_key, default_limits=["120/minute"])
 
 
 @asynccontextmanager
@@ -159,16 +170,23 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# Security settings from config (with safe defaults)
+_security_cfg = CONFIG.get("security", {})
+_trusted_proxies = _security_cfg.get("trusted_proxies", ["127.0.0.1", "::1"])
+_cors_origins = _security_cfg.get("cors_origins", [BASE_URL])
+
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 # Include routers
 app.include_router(mcp.router)
+app.include_router(internal.router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

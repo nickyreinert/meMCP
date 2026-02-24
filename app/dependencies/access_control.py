@@ -1,39 +1,28 @@
 """
-app/dependencies/access_control.py — Tri-Stage Access Control
-=============================================================
+app/dependencies/access_control.py — Three-Tier Access Control
+===============================================================
 
-Implements a three-stage access system for the meMCP API:
+Implements a three-tier access system for the meMCP API:
 
-  - Public:   No token supplied → metadata-only (tool/resource/prompt listings).
-  - Private:  Valid Bearer token → full data access, all calls tracked.
-  - Elevated: Valid Bearer token with tier='elevated' → all Private access plus
-              Intelligence Hub tools (Groq/Perplexity LLM calls).
+  - Anonymous: No token supplied → metadata-only (tool/resource/prompt listings).
+  - MCP:       Valid Bearer token with tier='mcp' → full data access, all calls tracked.
+  - Chat:      Valid Bearer token with tier='chat' → chat proxy authentication only;
+               proxy derives scoped MCP tokens for actual API calls.
 
 Token lookup (checked in order):
   1. Authorization: Bearer <token>  header
-  2. ?token=<value>                 query parameter
+  2. ?token=<value>                 query parameter (DEPRECATED — use header)
 
 Usage
 -----
 Protect an endpoint that requires a valid token::
 
-    from app.dependencies.access_control import require_private_access, TokenInfo
+    from app.dependencies.access_control import require_mcp_access, TokenInfo
 
     @router.post("/mcp/tools/call")
     async def call_tool(
         ...,
-        token_info: TokenInfo = Depends(require_private_access),
-    ):
-        ...
-
-Require Elevated tier specifically::
-
-    from app.dependencies.access_control import require_elevated_access
-
-    @router.post("/mcp/intelligence/simulate_interview")
-    async def simulate_interview(
-        ...,
-        token_info: TokenInfo = Depends(require_elevated_access),
+        token_info: TokenInfo = Depends(require_mcp_access),
     ):
         ...
 
@@ -45,7 +34,7 @@ Optionally inspect the stage without hard-blocking::
     async def list_tools(
         token_info: TokenInfo | None = Depends(get_access_stage),
     ):
-        is_private = token_info is not None
+        has_token = token_info is not None
 
 Log extra body args from a POST handler (one explicit call per protected POST)::
 
@@ -55,7 +44,9 @@ Log extra body args from a POST handler (one explicit call per protected POST)::
 """
 
 import fnmatch
+import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,12 +56,19 @@ from fastapi import Depends, HTTPException, Request
 
 from db.models import get_db, DB_PATH
 
+logger = logging.getLogger(__name__)
 
-# ── Stage constants ───────────────────────────────────────────────────────────
 
-STAGE_PUBLIC   = "public"
-STAGE_PRIVATE  = "private"
-STAGE_ELEVATED = "elevated"
+# ── Tier constants ────────────────────────────────────────────────────────────
+
+STAGE_ANONYMOUS = "anonymous"
+STAGE_MCP       = "mcp"
+STAGE_CHAT      = "chat"
+
+# Backward-compat aliases (used internally for mapping old DB values)
+STAGE_PUBLIC   = STAGE_ANONYMOUS
+STAGE_PRIVATE  = STAGE_MCP
+STAGE_ELEVATED = STAGE_MCP
 
 
 # ── Path-matching helpers ─────────────────────────────────────────────────────
@@ -94,14 +92,16 @@ def get_required_level(path: str, protected_config: dict) -> Optional[str]:
     ``protected_endpoints`` block in config.yaml.
 
     Returns:
-        ``STAGE_ELEVATED`` — path is in ``elevated_required`` list.
-        ``STAGE_PRIVATE``  — path is in ``private_required`` list.
-        ``None``           — not listed; no config-level restriction (public fallback).
+        ``STAGE_MCP``  — path is in ``mcp_required`` (or legacy ``private_required``) list.
+        ``None``       — not listed; no config-level restriction (anonymous fallback).
     """
-    if _path_matches_any(path, protected_config.get("elevated_required", [])):
-        return STAGE_ELEVATED
-    if _path_matches_any(path, protected_config.get("private_required", [])):
-        return STAGE_PRIVATE
+    # Support both new key (mcp_required) and legacy key (private_required)
+    mcp_paths = (
+        protected_config.get("mcp_required", [])
+        or protected_config.get("private_required", [])
+    )
+    if _path_matches_any(path, mcp_paths):
+        return STAGE_MCP
     return None
 
 
@@ -112,8 +112,8 @@ class TokenInfo:
     """Validated token metadata returned by access dependencies."""
     id:         int
     owner_name: str
-    stage:      str          # STAGE_PRIVATE | STAGE_ELEVATED
-    # Per-token intelligence budget overrides (None = use global defaults from config.yaml)
+    stage:      str          # STAGE_MCP | STAGE_CHAT
+    # Per-token budget overrides (None = use global defaults from config.yaml)
     max_tokens_per_session:  Optional[int] = None
     max_calls_per_day:       Optional[int] = None
     max_input_chars:         Optional[int] = None
@@ -133,11 +133,17 @@ def _get_db_conn():
 
 def _validate_token(conn, token_value: str) -> Optional[TokenInfo]:
     """
-    Look up *token_value* in the tokens table.
+    Look up *token_value* in both the ``tokens`` and ``derived_tokens`` tables.
+
+    For derived tokens, also verifies that the parent token is still active.
 
     Returns ``TokenInfo`` if the token exists, is active, and has not expired.
     Returns ``None`` otherwise (caller decides whether to raise 403 or not).
     """
+    now = datetime.now(timezone.utc)
+
+    # ── 1. Check regular tokens table (hashed lookup, with plaintext fallback)
+    token_hash = hashlib.sha256(token_value.encode()).hexdigest()
     row = conn.execute(
         """
         SELECT id, owner_name, expires_at, is_active,
@@ -146,39 +152,101 @@ def _validate_token(conn, token_value: str) -> Optional[TokenInfo]:
         FROM tokens
         WHERE token_value = ?
         """,
-        (token_value,),
+        (token_hash,),
     ).fetchone()
 
+    # Fallback: try plaintext lookup for legacy un-hashed tokens
     if not row:
+        row = conn.execute(
+            """
+            SELECT id, owner_name, expires_at, is_active,
+                   tier, max_tokens_per_session, max_calls_per_day,
+                   max_input_chars, max_output_chars
+            FROM tokens
+            WHERE token_value = ?
+            """,
+            (token_value,),
+        ).fetchone()
+
+    if row:
+        if not row["is_active"]:
+            return None
+
+        try:
+            expires_at = datetime.fromisoformat(row["expires_at"])
+        except ValueError:
+            return None
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if now > expires_at:
+            return None
+
+        # Map DB tier value to stage constant (with backward compat)
+        db_tier = (row["tier"] or "mcp").lower()
+        _TIER_MAP = {
+            "mcp": STAGE_MCP,
+            "chat": STAGE_CHAT,
+            "private": STAGE_MCP,
+            "elevated": STAGE_MCP,
+        }
+        stage = _TIER_MAP.get(db_tier, STAGE_MCP)
+
+        return TokenInfo(
+            id=row["id"],
+            owner_name=row["owner_name"],
+            stage=stage,
+            max_tokens_per_session=row["max_tokens_per_session"],
+            max_calls_per_day=row["max_calls_per_day"],
+            max_input_chars=row["max_input_chars"],
+            max_output_chars=row["max_output_chars"],
+        )
+
+    # ── 2. Check derived tokens table (token stored as SHA-256 hash) ─────────
+    hashed = hashlib.sha256(token_value.encode()).hexdigest()
+    drow = conn.execute(
+        """
+        SELECT d.id, d.parent_token_id, d.scope, d.expires_at, d.is_active,
+               t.owner_name, t.is_active AS parent_active, t.expires_at AS parent_expires
+        FROM derived_tokens d
+        JOIN tokens t ON t.id = d.parent_token_id
+        WHERE d.token_value = ?
+        """,
+        (hashed,),
+    ).fetchone()
+
+    if not drow:
         return None
 
-    if not row["is_active"]:
+    if not drow["is_active"]:
         return None
 
-    # Parse expires_at; treat naive datetimes as UTC
+    # Check derived token expiry
     try:
-        expires_at = datetime.fromisoformat(row["expires_at"])
+        d_expires = datetime.fromisoformat(drow["expires_at"])
     except ValueError:
-        return None  # Malformed date → treat as invalid
-
-    now = datetime.now(timezone.utc)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if now > expires_at:
+        return None
+    if d_expires.tzinfo is None:
+        d_expires = d_expires.replace(tzinfo=timezone.utc)
+    if now > d_expires:
         return None
 
-    # Map DB tier value to stage constant
-    db_tier = (row["tier"] or "private").lower()
-    stage = STAGE_ELEVATED if db_tier == "elevated" else STAGE_PRIVATE
+    # Also verify parent token is still valid
+    if not drow["parent_active"]:
+        return None
+    try:
+        p_expires = datetime.fromisoformat(drow["parent_expires"])
+    except ValueError:
+        return None
+    if p_expires.tzinfo is None:
+        p_expires = p_expires.replace(tzinfo=timezone.utc)
+    if now > p_expires:
+        return None
 
+    # Derived tokens always get MCP stage (they are scoped for API access)
     return TokenInfo(
-        id=row["id"],
-        owner_name=row["owner_name"],
-        stage=stage,
-        max_tokens_per_session=row["max_tokens_per_session"],
-        max_calls_per_day=row["max_calls_per_day"],
-        max_input_chars=row["max_input_chars"],
-        max_output_chars=row["max_output_chars"],
+        id=drow["parent_token_id"],
+        owner_name=drow["owner_name"],
+        stage=STAGE_MCP,
     )
 
 
@@ -229,6 +297,12 @@ def _extract_raw_token(request: Request) -> Optional[str]:
 
     param = request.query_params.get("token", "").strip()
     if param:
+        logger.warning(
+            "Token supplied via query parameter (deprecated) for %s — "
+            "use Authorization: Bearer header instead",
+            request.url.path,
+        )
+        request.state._token_via_query_param = True
         return param
 
     return None
@@ -264,15 +338,14 @@ class _AccessGate:
                 raise HTTPException(
                     status_code=403,
                     detail={
-                        "stage": STAGE_PUBLIC,
+                        "stage": STAGE_ANONYMOUS,
                         "message": (
                             "Access Restricted: this endpoint requires a valid token. "
-                            "Provide it via 'Authorization: Bearer <token>' "
-                            "or the '?token=<token>' query parameter."
+                            "Provide it via 'Authorization: Bearer <token>' header."
                         ),
                     },
                 )
-            return None  # Public stage — caller handles gracefully
+            return None  # Anonymous stage — caller handles gracefully
 
         # ── Token provided — validate ────────────────────────────────────────
         token_info = _validate_token(conn, raw_token)
@@ -280,7 +353,7 @@ class _AccessGate:
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "stage": STAGE_PUBLIC,
+                    "stage": STAGE_ANONYMOUS,
                     "message": "Access Restricted: token is invalid, expired, or revoked.",
                 },
             )
@@ -298,51 +371,22 @@ class _AccessGate:
 
 # ── Public dependency instances ───────────────────────────────────────────────
 
-require_private_access = _AccessGate(require_token=True)
+require_mcp_access = _AccessGate(require_token=True)
 """
 Dependency: raises HTTP 403 if no valid token is provided.
-Inject as ``token_info: TokenInfo = Depends(require_private_access)``.
+Inject as ``token_info: TokenInfo = Depends(require_mcp_access)``.
 """
+
+# Backward-compat alias — existing code that imports require_private_access
+# will continue to work without changes.
+require_private_access = require_mcp_access
 
 get_access_stage = _AccessGate(require_token=False)
 """
-Dependency: returns ``None`` (public) or ``TokenInfo`` (private/elevated).
+Dependency: returns ``None`` (anonymous) or ``TokenInfo`` (mcp/chat).
 Raises HTTP 403 only when a token IS present but is invalid/expired.
 Inject as ``token_info: TokenInfo | None = Depends(get_access_stage)``.
 """
-
-
-def require_elevated_access(
-    token_info: TokenInfo = Depends(require_private_access),
-) -> TokenInfo:
-    """
-    Dependency: raises HTTP 403 if the token does not have ELEVATED tier.
-
-    Compose on top of ``require_private_access`` so that the basic token
-    validation (existence, expiry, activity) is always checked first.
-
-    Inject as ``token_info: TokenInfo = Depends(require_elevated_access)``.
-
-    To upgrade a token to the Elevated tier, use::
-
-        python scripts/manage_tokens.py upgrade --id <token_id>
-    """
-    if token_info.stage != STAGE_ELEVATED:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "stage": token_info.stage,
-                "required_stage": STAGE_ELEVATED,
-                "message": (
-                    "Access Restricted: this endpoint requires an Elevated-tier token. "
-                    "Your current token has Private-tier access only. "
-                    "To unlock Intelligence Hub tools (AI reasoning, live search, "
-                    "interview simulation, market analysis), upgrade your token via: "
-                    "python scripts/manage_tokens.py upgrade --id <token_id>"
-                ),
-            },
-        )
-    return token_info
 
 
 # ── Config-driven middleware guard ────────────────────────────────────────────
@@ -363,12 +407,11 @@ def build_endpoint_guard(protected_config: dict):
 
     Behaviour
     ---------
-    - Path in ``elevated_required`` → validates that a valid Elevated-tier token
-      is present; returns HTTP 403 otherwise.
-    - Path in ``private_required``  → validates any valid token; HTTP 403 if absent.
-    - Path not listed               → passes through (public, no config restriction).
+    - Path in ``mcp_required`` (or legacy ``private_required``) → validates
+      that a valid token is present; returns HTTP 403 if absent.
+    - Path not listed → passes through (anonymous, no config restriction).
 
-    Existing route-level dependencies (``require_private_access`` etc.) continue
+    Existing route-level dependencies (``require_mcp_access`` etc.) continue
     to apply after this middleware; the guard acts as an early-exit layer only.
 
     Usage in main.py::
@@ -390,11 +433,10 @@ def build_endpoint_guard(protected_config: dict):
         raw_token = _extract_raw_token(request)
         if not raw_token:
             return _forbidden_json(
-                STAGE_PUBLIC,
+                STAGE_ANONYMOUS,
                 (
                     "Access Restricted: this endpoint requires a valid token. "
-                    "Provide it via 'Authorization: Bearer <token>' "
-                    "or the '?token=<token>' query parameter."
+                    "Provide it via 'Authorization: Bearer <token>' header."
                 ),
             )
 
@@ -404,21 +446,12 @@ def build_endpoint_guard(protected_config: dict):
 
             if not token_info:
                 return _forbidden_json(
-                    STAGE_PUBLIC,
+                    STAGE_ANONYMOUS,
                     "Access Restricted: token is invalid, expired, or revoked.",
                 )
 
-            if required == STAGE_ELEVATED and token_info.stage != STAGE_ELEVATED:
-                return _forbidden_json(
-                    token_info.stage,
-                    (
-                        "Access Restricted: this endpoint requires an Elevated-tier token. "
-                        "Your current token has Private-tier access only."
-                    ),
-                )
-
             # Log the access — the only logging point for routes that have no
-            # require_private_access dependency (most routes in main.py).
+            # require_mcp_access dependency (most routes in main.py).
             try:
                 qp = {k: v for k, v in request.query_params.items() if k != "token"}
                 log_usage(conn, token_info.id, path, qp or None)
@@ -427,6 +460,17 @@ def build_endpoint_guard(protected_config: dict):
         finally:
             conn.close()
 
-        return await call_next(request)
+        response = await call_next(request)
+
+        # Add deprecation header when token was supplied via query parameter
+        if getattr(request.state, "_token_via_query_param", False):
+            response.headers["Deprecation"] = "true"
+            response.headers["Sunset"] = "2026-06-01"
+            response.headers["X-Deprecation-Notice"] = (
+                "Query parameter token (?token=...) is deprecated. "
+                "Use Authorization: Bearer <token> header instead."
+            )
+
+        return response
 
     return _guard

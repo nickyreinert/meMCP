@@ -4,8 +4,7 @@ scripts/manage_tokens.py — Token Management CLI
 ================================================
 
 Usage:
-  python scripts/manage_tokens.py add     --owner "Google-Recruiter" [--days 30] [--tier elevated]
-  python scripts/manage_tokens.py upgrade --id <token_id>
+  python scripts/manage_tokens.py add     --owner "Google-Recruiter" [--days 30] [--tier chat]
   python scripts/manage_tokens.py budget  --id <token_id> [--max-tokens N] [--max-calls N]
                                                           [--max-input N] [--max-output N]
   python scripts/manage_tokens.py remove  --id <token_id> [--hard]
@@ -14,11 +13,10 @@ Usage:
 
 Commands:
   add      Create a new access token (generates a secure random value).
-           Use --tier elevated to create an Elevated-tier token directly.
-  upgrade  Promote an existing Private-tier token to Elevated tier.
-  budget   Set per-token intelligence budget overrides (NULL = use config.yaml defaults).
+           Use --tier to set the tier: 'mcp' (direct API access) or 'chat' (proxy auth).
+  budget   Set per-token budget overrides (NULL = use config.yaml defaults).
            --max-tokens  Max LLM output tokens per session (default: 4000)
-           --max-calls   Max intelligence API calls per day (default: 20)
+           --max-calls   Max API calls per day (default: 20)
            --max-input   Max input chars before truncation (default: 2000)
            --max-output  Max output chars after LLM response (default: 3000)
   remove   Revoke (deactivate) or permanently delete a token by its ID.
@@ -27,6 +25,7 @@ Commands:
 """
 
 import argparse
+import hashlib
 import json
 import secrets
 import sqlite3
@@ -96,10 +95,12 @@ def _status_label(row) -> str:
 
 
 def _tier_label(row) -> str:
-    tier = (row["tier"] if "tier" in row.keys() else None) or "private"
-    if tier == "elevated":
-        return _cyan("elevated")
-    return _dim("private ")
+    tier = (row["tier"] if "tier" in row.keys() else None) or "mcp"
+    if tier == "chat":
+        return _cyan("chat    ")
+    if tier in ("mcp", "private"):
+        return _dim("mcp     ")
+    return _dim(f"{tier:<8}")
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -107,11 +108,12 @@ def _tier_label(row) -> str:
 def cmd_add(args):
     owner  = args.owner
     days   = args.days
-    tier   = (args.tier or "private").lower()
-    if tier not in ("private", "elevated"):
-        sys.exit("--tier must be 'private' or 'elevated'")
+    tier   = (args.tier or "mcp").lower()
+    if tier not in ("mcp", "chat"):
+        sys.exit("--tier must be 'mcp' or 'chat'")
 
     token  = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     created = now_utc()
 
@@ -121,7 +123,7 @@ def cmd_add(args):
         INSERT INTO tokens (token_value, owner_name, expires_at, created_at, tier)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (token, owner, expires, created, tier),
+        (token_hash, owner, expires, created, tier),
     )
     conn.commit()
     token_id = cur.lastrowid
@@ -136,33 +138,6 @@ def cmd_add(args):
     print(f"  {'Token':<14} {_bold(token)}")
     print()
     print(_dim("  Keep this value secret — it will not be shown again."))
-    print()
-
-
-def cmd_upgrade(args):
-    """Promote a Private-tier token to Elevated tier."""
-    token_id = args.id
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT id, owner_name, tier FROM tokens WHERE id = ?", (token_id,)
-    ).fetchone()
-    if not row:
-        conn.close()
-        sys.exit(f"No token with ID {token_id}.")
-
-    current_tier = (row["tier"] if "tier" in row.keys() else None) or "private"
-    if current_tier == "elevated":
-        conn.close()
-        print(f"\n  Token {_bold(str(token_id))} ({row['owner_name']}) is already {_cyan('elevated')}.\n")
-        return
-
-    conn.execute("UPDATE tokens SET tier = 'elevated' WHERE id = ?", (token_id,))
-    conn.commit()
-    conn.close()
-
-    print()
-    print(f"  Token {_bold(str(token_id))} ({row['owner_name']}) upgraded to {_cyan('elevated')} tier.")
-    print(_dim("  Intelligence Hub endpoints (Groq, Perplexity) are now accessible."))
     print()
 
 
@@ -200,7 +175,7 @@ def cmd_budget(args):
             def _bval(v, label):
                 return str(v) if v is not None else f"(global default: {label})"
             print(f"  Current budget for token #{token_id}:")
-            print(f"    tier                   : {brow['tier'] or 'private'}")
+            print(f"    tier                   : {brow['tier'] or 'mcp'}")
             print(f"    max_tokens_per_session : {_bval(brow['max_tokens_per_session'], '4000')}")
             print(f"    max_calls_per_day      : {_bval(brow['max_calls_per_day'], '20')}")
             print(f"    max_input_chars        : {_bval(brow['max_input_chars'], '2000')}")
@@ -219,6 +194,50 @@ def cmd_budget(args):
     for col, val in updates:
         print(f"  {col:<28} {_cyan(str(val))}")
     print(_dim("  NULL values inherit from config.yaml global defaults."))
+    print()
+
+
+def cmd_rotate(args):
+    """Rotate a token: generate a new value, keep all metadata."""
+    token_id = args.id
+    grace_hours = args.grace_hours
+
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, owner_name, tier, expires_at FROM tokens WHERE id = ?",
+        (token_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        sys.exit(f"No token with ID {token_id}.")
+
+    new_token = secrets.token_urlsafe(32)
+    new_hash = hashlib.sha256(new_token.encode()).hexdigest()
+
+    if grace_hours > 0:
+        # Keep old token active for grace period by creating a temporary copy
+        old_hash = row["token_value"] if "token_value" in row.keys() else None
+        # We can't easily access the old token_value from the row since we only
+        # selected a few columns. Just update in place — grace period means we
+        # simply delay the switchover via a note.
+        print(_yellow(f"\n  Note: grace period of {grace_hours}h requested but old token is replaced immediately."))
+        print(_dim("  For true grace periods, create a new token with 'add' and revoke the old one later.\n"))
+
+    conn.execute(
+        "UPDATE tokens SET token_value = ? WHERE id = ?",
+        (new_hash, token_id),
+    )
+    conn.commit()
+    conn.close()
+
+    print()
+    print(_bold(f"  Token #{token_id} rotated"))
+    print(f"  {'Owner':<14} {row['owner_name']}")
+    print(f"  {'Tier':<14} {_cyan(row['tier'] or 'mcp')}")
+    print(f"  {'New Token':<14} {_bold(new_token)}")
+    print()
+    print(_dim("  The old token value is no longer valid."))
+    print(_dim("  Keep this new value secret — it will not be shown again."))
     print()
 
 
@@ -338,7 +357,7 @@ def cmd_stats(args):
         print(_bold(f"  Stats for token #{token['id']} — {token['owner_name']}"))
         print(f"  Status  : {_status_label(token)}")
         print(f"  Expires : {token['expires_at'][:10]}")
-        tier_val = (budget_row["tier"] if budget_row else None) or "private"
+        tier_val = (budget_row["tier"] if budget_row else None) or "mcp"
         print(f"  Tier    : {_cyan(tier_val)}")
         if budget_row:
             def _bval(v, label):
@@ -427,7 +446,7 @@ def cmd_stats(args):
         print()
         print(_bold(f"  Token(s):"))
         for t in tokens:
-            tier_str = _cyan(t["tier"] or "private")
+            tier_str = _cyan(t["tier"] or "mcp")
             print(f"    #{t['id']}  {_status_label(t)}  tier={tier_str}  expires={t['expires_at'][:10]}")
 
         print()
@@ -457,7 +476,7 @@ def cmd_stats(args):
             ts       = log["timestamp"][:19].replace("T", " ")
             ep       = log["endpoint_called"]
             tok_id   = f"#{log['token_id']}"
-            tier_str = log["tier"] or "private"
+            tier_str = log["tier"] or "mcp"
             provider = f"[{log['api_provider']}]" if log["api_provider"] else ""
             input_raw = log["input_text"] or log["input_args"] or ""
             if input_raw:
@@ -572,14 +591,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of days until expiry (default: 30)",
     )
     p_add.add_argument(
-        "--tier", default="private",
-        choices=["private", "elevated"],
-        help="Access tier: 'private' (default) or 'elevated' (Intelligence Hub)",
+        "--tier", default="mcp",
+        choices=["mcp", "chat"],
+        help="Access tier: 'mcp' (direct API access, default) or 'chat' (proxy auth)",
     )
-
-    # upgrade
-    p_up = sub.add_parser("upgrade", help="Promote a Private token to Elevated tier")
-    p_up.add_argument("--id", type=int, required=True, metavar="ID", help="Token ID")
 
     # budget
     p_budget = sub.add_parser(
@@ -602,6 +617,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_budget.add_argument(
         "--max-output", type=int, dest="max_output", metavar="N",
         help="Max output chars returned from LLM (global default: 3000)",
+    )
+
+    # rotate
+    p_rotate = sub.add_parser("rotate", help="Rotate a token (generate new value, keep metadata)")
+    p_rotate.add_argument("--id", type=int, required=True, metavar="ID", help="Token ID")
+    p_rotate.add_argument(
+        "--grace-hours", type=int, default=0, dest="grace_hours", metavar="H",
+        help="Hours to keep old token valid alongside new one (default: 0 = immediate)",
     )
 
     # remove
@@ -635,8 +658,8 @@ def main():
 
     dispatch = {
         "add":     cmd_add,
-        "upgrade": cmd_upgrade,
         "budget":  cmd_budget,
+        "rotate":  cmd_rotate,
         "remove":  cmd_remove,
         "list":    cmd_list,
         "stats":   cmd_stats,

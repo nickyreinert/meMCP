@@ -156,8 +156,8 @@ CREATE TABLE IF NOT EXISTS tokens (
     expires_at              TEXT NOT NULL,       -- ISO-8601 datetime (UTC)
     is_active               INTEGER DEFAULT 1,   -- 1=active, 0=revoked
     created_at              TEXT NOT NULL,
-    -- Tier and per-token intelligence budget overrides (NULL = use global defaults)
-    tier                    TEXT DEFAULT 'private',  -- private | elevated
+    -- Tier and per-token budget overrides (NULL = use global defaults)
+    tier                    TEXT DEFAULT 'mcp',  -- mcp | chat
     max_tokens_per_session  INTEGER,             -- override: max LLM output tokens per session
     max_calls_per_day       INTEGER,             -- override: max intelligence calls per day
     max_input_chars         INTEGER,             -- override: max input chars before truncation
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     endpoint_called TEXT NOT NULL,
     timestamp       TEXT NOT NULL,  -- ISO-8601 datetime (UTC)
     input_args      TEXT,           -- JSON-encoded query params / body args
-    tier            TEXT,           -- private | elevated (caller's tier at time of call)
+    tier            TEXT,           -- mcp | chat (caller's tier at time of call)
     api_provider    TEXT,           -- groq | perplexity (NULL for standard calls)
     input_length    INTEGER,        -- character count of the raw input sent
     input_text      TEXT,           -- actual input text (truncated to max_input_chars for storage)
@@ -182,6 +182,20 @@ CREATE TABLE IF NOT EXISTS usage_logs (
 CREATE INDEX IF NOT EXISTS idx_usage_token        ON usage_logs(token_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp    ON usage_logs(timestamp);
 -- Indexes on new columns are created in _migrate_columns (safe for existing DBs)
+
+-- ── Derived tokens (scoped, short-lived, created by proxy) ──────────────────
+CREATE TABLE IF NOT EXISTS derived_tokens (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_value       TEXT NOT NULL UNIQUE,       -- hashed (SHA-256)
+    parent_token_id   INTEGER NOT NULL REFERENCES tokens(id),
+    scope             TEXT NOT NULL DEFAULT 'mcp_read',
+    expires_at        TEXT NOT NULL,              -- ISO-8601 datetime (UTC), short TTL
+    created_at        TEXT NOT NULL,
+    is_active         INTEGER DEFAULT 1,          -- 1=active, 0=revoked
+    chat_id           TEXT                        -- links to the chat session that requested it
+);
+CREATE INDEX IF NOT EXISTS idx_derived_value  ON derived_tokens(token_value);
+CREATE INDEX IF NOT EXISTS idx_derived_parent ON derived_tokens(parent_token_id);
 """
 
 
@@ -215,12 +229,12 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     """
     migrations = [
         # tokens — tier + per-token budget overrides
-        "ALTER TABLE tokens ADD COLUMN tier TEXT DEFAULT 'private'",
+        "ALTER TABLE tokens ADD COLUMN tier TEXT DEFAULT 'mcp'",
         "ALTER TABLE tokens ADD COLUMN max_tokens_per_session INTEGER",
         "ALTER TABLE tokens ADD COLUMN max_calls_per_day INTEGER",
         "ALTER TABLE tokens ADD COLUMN max_input_chars INTEGER",
         "ALTER TABLE tokens ADD COLUMN max_output_chars INTEGER",
-        # usage_logs — intelligence hub extension columns
+        # usage_logs — extension columns
         "ALTER TABLE usage_logs ADD COLUMN tier TEXT",
         "ALTER TABLE usage_logs ADD COLUMN api_provider TEXT",
         "ALTER TABLE usage_logs ADD COLUMN input_length INTEGER",
@@ -236,6 +250,33 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             conn.execute(stmt)
         except Exception:
             pass  # Column/index already exists — skip silently
+
+    # ── Hash plaintext tokens (one-time migration) ───────────────────────────
+    # Detect unhashed tokens: SHA-256 hex strings are exactly 64 hex chars.
+    # Tokens created by secrets.token_urlsafe(32) are ~43 chars with Base64.
+    import hashlib as _hashlib
+    import re as _re
+    _SHA256_RE = _re.compile(r"^[0-9a-f]{64}$")
+    try:
+        rows = conn.execute("SELECT id, token_value FROM tokens").fetchall()
+        migrated = 0
+        for row in rows:
+            if not _SHA256_RE.match(row["token_value"]):
+                # Plaintext token — hash it
+                hashed = _hashlib.sha256(row["token_value"].encode()).hexdigest()
+                conn.execute(
+                    "UPDATE tokens SET token_value = ? WHERE id = ?",
+                    (hashed, row["id"]),
+                )
+                migrated += 1
+        if migrated:
+            conn.commit()
+            import logging as _log
+            _log.getLogger(__name__).info(
+                "Migrated %d plaintext token(s) to SHA-256 hashes", migrated
+            )
+    except Exception:
+        pass  # tokens table may not exist yet on first run
 
 
 # --- ENTITY CRUD ---
