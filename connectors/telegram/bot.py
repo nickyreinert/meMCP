@@ -46,7 +46,7 @@ def main() -> None:
     if not TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN is not set")
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
     log.info("Telegram bot starting (polling)…")
     app.run_polling()
 

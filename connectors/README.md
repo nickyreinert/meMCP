@@ -45,7 +45,7 @@ cp connectors/.env.example connectors/.env
 | `GROQ_API_KEY` | when `chat.host: groq` | Groq API key |
 | `PROXY_SECRET` | recommended | Auth header secret + token encryption key |
 
-### 2. `config.yaml` — `chat:` section
+### 2. `config.tech.yaml` — `chat:` section
 
 ```yaml
 chat:

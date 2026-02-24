@@ -24,9 +24,9 @@ services:
       - .env
     volumes:
       - proxy_data:/data
-      - ../config.yaml:/config/config.yaml:ro
+      - ../config.tech.yaml:/config/config.tech.yaml:ro
     environment:
-      - CONFIG_PATH=/config/config.yaml
+      - CONFIG_PATH=/config/config.tech.yaml
       # Docker-specific overrides — paths differ from local-dev config.yaml values
       - MEMCP_URL=${MEMCP_URL:-http://host.docker.internal:8000}
       - PROXY_DB_PATH=/data/proxy.db

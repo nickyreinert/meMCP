@@ -34,8 +34,6 @@ Dependencies:
 
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends, Query, Header
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 import json
 
 from app.mcp_tools import get_tool_definitions, execute_tool
@@ -48,7 +46,6 @@ from db.models import get_db, DB_PATH
 # --- ROUTER SETUP ---
 
 router = APIRouter(prefix="/mcp", tags=["MCP Tools"])
-limiter = Limiter(key_func=get_remote_address)
 
 
 # --- HELPER FUNCTIONS ---
@@ -143,7 +140,6 @@ def get_resource_definitions() -> list:
 # --- ENDPOINTS ---
 
 @router.get("/tools", summary="List available MCP tools")
-@limiter.limit("120/minute")
 async def list_mcp_tools(request: Request):
     """
     Returns all available MCP tools for programmatic database queries.
@@ -185,9 +181,7 @@ async def list_mcp_tools(request: Request):
 
 
 @router.post("/tools/call", summary="Execute an MCP tool")
-@limiter.limit("60/minute")
 async def call_mcp_tool(
-    request: Request,
     tool_request: dict,
     conn=Depends(db),
     token_info: TokenInfo = Depends(require_private_access),
@@ -241,7 +235,7 @@ async def call_mcp_tool(
     arguments = tool_request.get("arguments", {})
 
     # Log full body args now that they're parsed (supplements the endpoint-level log)
-    log_usage(conn, token_info.id, request.url.path, tool_request)
+    log_usage(conn, token_info.id, "/mcp/tools/call", tool_request)
     
     # Validate tool exists
     tool_names = [t["name"] for t in get_tool_definitions()]
@@ -264,7 +258,6 @@ async def call_mcp_tool(
 # --- MCP RESOURCE ENDPOINTS ---
 
 @router.get("/resources", summary="List available MCP resources")
-@limiter.limit("120/minute")
 async def list_mcp_resources(request: Request):
     """
     Returns all available MCP resources for LLM browsing.
@@ -321,7 +314,6 @@ async def list_mcp_resources(request: Request):
 
 
 @router.get("/resources/read", summary="Read a specific MCP resource")
-@limiter.limit("200/minute")
 async def read_mcp_resource(
     request: Request,
     uri: str = Query(..., description="Resource URI (e.g., me://profile/greeting)"),

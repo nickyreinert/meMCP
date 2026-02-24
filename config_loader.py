@@ -9,11 +9,12 @@ Precedence: config.content.yaml values overwrite config.tech.yaml values
 on key collision (content is user-specific, tech is more generic defaults).
 """
 
+from typing import Optional, Union
 import yaml
 from pathlib import Path
 
 
-def load_config(root: Path | str | None = None) -> dict:
+def load_config(root: Optional[Union[Path, str]] = None) -> dict:
     """
     Load and merge config.tech.yaml + config.content.yaml.
 

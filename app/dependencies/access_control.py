@@ -54,8 +54,6 @@ Log extra body args from a POST handler (one explicit call per protected POST)::
     log_usage(conn, token_info.id, request.url.path, input_args=tool_request)
 """
 
-from __future__ import annotations
-
 import fnmatch
 import json
 import re
