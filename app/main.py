@@ -804,13 +804,13 @@ async def schema(request: Request):
                 "analytics_fields": ["date"]
             },
             "identity": {
-                "description": "Profile owner identity (name, bio, contact, links)",
+                "description": "Profile owner identity (name, bio, contact, links, career)",
                 "primary_key": "id",
-                "categories": ["basic", "links", "contact"],
+                "categories": ["basic", "links", "contact", "career"],
                 "fields": {
                     "id": {"type": "string", "format": "uuid", "required": True},
                     "flavor": {"type": "string", "enum": ["identity"], "required": True},
-                    "category": {"type": "string", "enum": ["basic", "links", "contact"], "nullable": True},
+                    "category": {"type": "string", "enum": ["basic", "links", "contact", "career"], "nullable": True},
                     "title": {"type": "string", "required": True},
                     "raw_data": {"type": "object", "description": "Multi-language structured data (JSON)"},
                     "created_at": {"type": "string", "format": "date-time", "required": True},
@@ -1123,11 +1123,16 @@ async def greeting(
     links_raw = links_entity.get("raw_data", {})
     links_lang = links_raw.get(resolved, links_raw.get(DEFAULT_LANG, {}))
     
-    # Get contact info  
+    # Get contact info
     contact_entity = identity_data.get("contact", {})
     contact_raw = contact_entity.get("raw_data", {})
     contact_lang = contact_raw.get(resolved, contact_raw.get(DEFAULT_LANG, {}))
-    
+
+    # Get career info
+    career_entity = identity_data.get("career", {})
+    career_raw = career_entity.get("raw_data", {})
+    career_lang = career_raw.get(resolved, career_raw.get(DEFAULT_LANG, {}))
+
     return ok(
         {
             "name":        basic_lang.get("name", basic_entity.get("title", "")),
@@ -1142,6 +1147,14 @@ async def greeting(
                 "phone":     contact_lang.get("phone", ""),
                 "telegram":  contact_lang.get("telegram", ""),
                 "other":     contact_lang.get("other", ""),
+            },
+            "career": {
+                "status":                 career_lang.get("status", ""),
+                "preferred_roles":        career_lang.get("preferred_roles", []),
+                "industries_of_interest": career_lang.get("industries_of_interest", []),
+                "location_preferences":   career_lang.get("location_preferences", []),
+                "workload_preference":    career_lang.get("workload_preference", ""),
+                "salary_expectation":     career_lang.get("salary_expectation", 0),
             },
             "tags": basic_entity.get("tags", []),
         },

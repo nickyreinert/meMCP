@@ -1,3 +1,4 @@
+# this file belongs to /data folder
 identity:
   de:
     basic:
@@ -18,6 +19,13 @@ identity:
       phone: ""
       telegram: ""
       other: "LinkedIn message"
+    career:
+      status: "open to opportunities" # open to opportunities | not looking | actively looking
+      preferred_roles: ["Data Scientist", "AI Engineer", "Technical Consultant"]
+      industries_of_interest: ["Tech", "AI", "Data Science"]
+      location_preferences: ["Remote", "London", "UK"]
+      workload_preference: "full-time" # full-time | part-time | freelance | internship
+      salary_expectation: 0 # 0 means negotiable or not specified
     # this is a future feature, ignore it for now
     # later goal is to have a "trust of web"
     # those settings here point to other meMCP instances

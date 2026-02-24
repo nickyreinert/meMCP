@@ -1,10 +1,11 @@
 """
 scrapers/identity.py — Identity Data Scraper
 ============================================
-Loads identity data from identity.yaml and creates three entities:
+Loads identity data from identity.yaml and creates four entities:
 - identity/basic   → name, tagline, description, location
 - identity/links   → github, medium, blog, linkedin, etc.
 - identity/contact → reason, preferred, email, phone, telegram, other
+- identity/career  → status, preferred_roles, industries_of_interest, location_preferences, workload_preference, salary_expectation
 
 Purpose:
 - Transform identity.yaml into database entities
@@ -64,7 +65,7 @@ class IdentityScraper(BaseScraper):
     
     def run(self, force: bool = False) -> List[Dict[str, Any]]:
         """
-        Load identity data and create three entities (basic, links, contact).
+        Load identity data and create four entities (basic, links, contact, career).
         
         Args:
             force: If True, re-process even if cached
@@ -153,23 +154,23 @@ class IdentityScraper(BaseScraper):
         Dependent functions: None
         """
         entities = []
-        categories = ['basic', 'links', 'contact']
-        
+        categories = ['basic', 'links', 'contact', 'career']
+
         for category in categories:
             # Collect multi-lang data for this category
             multi_lang_data = {}
             title = category.capitalize()
             description_text = ""
-            
+
             for lang, lang_data in identity_data.items():
                 # Skip the 'people' section (future feature)
                 if lang == 'people':
                     continue
-                    
+
                 category_data = lang_data.get(category, {})
                 if category_data:
                     multi_lang_data[lang] = category_data
-                    
+
                     # Use first available language for title/description
                     if lang == 'en' or not description_text:
                         if category == 'basic':
@@ -181,6 +182,9 @@ class IdentityScraper(BaseScraper):
                         elif category == 'contact':
                             title = "Contact"
                             description_text = category_data.get('reason', '')
+                        elif category == 'career':
+                            title = "Career"
+                            description_text = category_data.get('status', '')
             
             # Create entity with multi-lang data stored as JSON
             entity = {
