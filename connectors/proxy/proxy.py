@@ -113,14 +113,30 @@ DB_PATH      = os.getenv("PROXY_DB_PATH") or _CFG.get("db_path", "data/proxy.db"
 GROQ_KEY     = os.getenv("GROQ_API_KEY", "")
 PROXY_SECRET = os.getenv("PROXY_SECRET", "")
 
-SYSTEM_PROMPT = (
-    "You are a conversational assistant for a personal profile server. "
-    "Answer questions about the person's background, experience, projects, and skills. "
-    "You have tools available to query the profile database — use them when you need data. "
-    "Format replies naturally for chat. Keep responses concise (2-4 sentences unless "
-    "more detail is requested). If a tool call returns an error about access tier, "
-    "explain that the user would need a higher-tier token for that feature."
-)
+_PERSONA     = _CFG.get("persona", {})
+PERSONA_NAME    = _PERSONA.get("name", "the profile owner")
+PERSONA_TAGLINE = _PERSONA.get("tagline", "")
+PERSONA_TONE    = _PERSONA.get("tone", "Be warm, concise, and professional.")
+STARTERS        = list(_CFG.get("starters", []))
+
+
+def _build_system_prompt() -> str:
+    identity = f"You are a conversational assistant representing {PERSONA_NAME}"
+    if PERSONA_TAGLINE:
+        identity += f" ({PERSONA_TAGLINE})"
+    identity += "."
+    return "\n".join([
+        identity,
+        "You speak on their behalf to people who have been granted access to their profile.",
+        "Answer questions about their background, experience, projects, and skills.",
+        "Always use the available tools to fetch factual data — never make things up.",
+        f"Tone: {PERSONA_TONE}",
+        "Format replies naturally for chat. Keep responses concise (2-4 sentences) unless more detail is requested.",
+        "If a tool returns an access_denied error, explain that the user would need a higher-tier token for that feature.",
+    ])
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 
 # ── Rate limiter (in-memory sliding window per chat_id) ──────────────────────
@@ -394,7 +410,7 @@ TOKEN_BAD  = "That token didn't work. Please try again, or ask the profile owner
 DISCONNECT = "Disconnected. Paste your meMCP access token to reconnect."
 
 
-async def _handle_message(chat_id: str, message: str) -> tuple[str, str]:
+async def _handle_message(chat_id: str, message: str) -> tuple[str, str, list[str]]:
     msg = message.strip()
     session = auth.get_session(chat_id)
 
@@ -403,16 +419,16 @@ async def _handle_message(chat_id: str, message: str) -> tuple[str, str]:
         if session and session.get("token"):
             await _revoke_derived_token(session["token"])
         auth.clear_session(chat_id)
-        return DISCONNECT, "needs_token"
+        return DISCONNECT, "needs_token", []
 
     if msg == "/status":
         state = session["state"] if session else "needs_token"
         token_info = "set" if (session and session.get("token")) else "not set"
-        return f"State: {state} | Token: {token_info} | Backend: {LLM_HOST}/{LLM_MODEL}", state
+        return f"State: {state} | Token: {token_info} | Backend: {LLM_HOST}/{LLM_MODEL}", state, []
 
     if session is None or session["state"] == "needs_token":
         auth.upsert_session(chat_id, state="awaiting_token")
-        return WELCOME, "awaiting_token"
+        return WELCOME, "awaiting_token", []
 
     if session["state"] == "awaiting_token":
         token_data = await _verify_token(msg)
@@ -422,22 +438,22 @@ async def _handle_message(chat_id: str, message: str) -> tuple[str, str]:
             if derived:
                 # Store the derived token (not the original chat token)
                 auth.upsert_session(chat_id, token=derived, state="active", history=[])
-                return TOKEN_OK, "active"
+                return TOKEN_OK, "active", STARTERS
             else:
                 # Derivation failed — fall back to using the chat token directly
                 logger.warning("Token derivation failed for %s — using chat token directly", chat_id)
                 auth.upsert_session(chat_id, token=msg, state="active", history=[])
-                return TOKEN_OK, "active"
-        return TOKEN_BAD, "awaiting_token"
+                return TOKEN_OK, "active", STARTERS
+        return TOKEN_BAD, "awaiting_token", []
 
     try:
         reply, updated_history = await _llm_loop(session["token"], session["history"], msg)
     except Exception as exc:
         logger.error("LLM loop error for %s: %s", chat_id, exc)
-        return "Sorry, something went wrong with the AI backend. Please try again.", "active"
+        return "Sorry, something went wrong with the AI backend. Please try again.", "active", []
 
     auth.upsert_session(chat_id, history=updated_history)
-    return reply, "active"
+    return reply, "active", []
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -450,6 +466,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     state: str
+    starters: list[str] = []
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -464,8 +481,8 @@ async def chat(req: ChatRequest, x_proxy_secret: str = Header("")):
     if _is_rate_limited(req.chat_id):
         raise HTTPException(429, f"Rate limit exceeded: max {RATE_LIMIT} messages per minute per user")
 
-    reply, state = await _handle_message(req.chat_id, req.message)
-    return ChatResponse(reply=reply, state=state)
+    reply, state, starters = await _handle_message(req.chat_id, req.message)
+    return ChatResponse(reply=reply, state=state, starters=starters)
 
 
 @app.get("/health")

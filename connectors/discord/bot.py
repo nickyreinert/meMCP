@@ -20,7 +20,7 @@ intents.dm_messages = True
 client = discord.Client(intents=intents)
 
 
-def call_proxy(chat_id: str, message: str) -> str:
+def call_proxy(chat_id: str, message: str) -> dict:
     with httpx.Client() as http:
         r = http.post(
             f"{PROXY_URL}/chat",
@@ -29,7 +29,7 @@ def call_proxy(chat_id: str, message: str) -> str:
             timeout=30,
         )
         r.raise_for_status()
-        return r.json()["reply"]
+        return r.json()
 
 
 @client.event
@@ -59,14 +59,22 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         try:
-            reply = call_proxy(chat_id, text)
+            data = call_proxy(chat_id, text)
+            reply = data["reply"]
+            starters = data.get("starters", [])
         except httpx.HTTPStatusError as e:
             reply = f"Proxy error {e.response.status_code}: {e.response.text}"
+            starters = []
         except Exception as e:
             log.exception("proxy call failed")
             reply = f"Error: {e}"
+            starters = []
 
-    await message.channel.send(reply)
+    if starters:
+        bullet_list = "\n".join(f"• {s}" for s in starters)
+        await message.channel.send(f"{reply}\n\n**Try asking:**\n{bullet_list}")
+    else:
+        await message.channel.send(reply)
 
 
 def main() -> None:

@@ -91,6 +91,21 @@ chat:
   max_input_chars: 2000              # truncate incoming text before sending to LLM
   max_output_chars: 3000             # truncate LLM response before returning
 
+  # Who the assistant represents — injected into the LLM system prompt
+  persona:
+    name: "Jane Doe"        # Whats your name or handle
+    tagline: ""                      # e.g. "Full-stack developer based in Berlin"
+    tone: "Be warm, concise, and professional."
+
+  # Suggested questions shown to users on connect.
+  # Telegram renders these as tap-able keyboard buttons; Slack/Discord as a bullet list.
+  # Write them as a recruiter would ask — they're talking TO the bot about the profile owner.
+  starters:
+    - "What's your tech stack?"
+    - "Are you open to new opportunities?"
+    - "What was your last role?"
+    - "Tell me about a recent project"
+
 # ── Endpoint Access Control ────────────────────────────────────────────────────
 # Configures which endpoints require a token and at which tier.
 # Paths support FastAPI-style {param} placeholders (e.g. /entities/{entity_id}).

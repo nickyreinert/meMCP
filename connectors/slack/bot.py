@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 app = App(token=BOT_TOKEN)
 
 
-def call_proxy(chat_id: str, message: str) -> str:
+def call_proxy(chat_id: str, message: str) -> dict:
     with httpx.Client() as client:
         r = client.post(
             f"{PROXY_URL}/chat",
@@ -28,7 +28,7 @@ def call_proxy(chat_id: str, message: str) -> str:
             timeout=30,
         )
         r.raise_for_status()
-        return r.json()["reply"]
+        return r.json()
 
 
 @app.event("message")
@@ -47,14 +47,22 @@ def handle_message(event, say, logger):
     log.info("message from %s: %r", chat_id, text[:60])
 
     try:
-        reply = call_proxy(chat_id, text)
+        data = call_proxy(chat_id, text)
+        reply = data["reply"]
+        starters = data.get("starters", [])
     except httpx.HTTPStatusError as e:
         reply = f"Proxy error {e.response.status_code}: {e.response.text}"
+        starters = []
     except Exception as e:
         log.exception("proxy call failed")
         reply = f"Error: {e}"
+        starters = []
 
-    say(reply)
+    if starters:
+        bullet_list = "\n".join(f"• {s}" for s in starters)
+        say(f"{reply}\n\n*Try asking:*\n{bullet_list}")
+    else:
+        say(reply)
 
 
 def main() -> None:
