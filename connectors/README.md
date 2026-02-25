@@ -15,9 +15,6 @@ meMCP  (port 8000)        ← unchanged, enforces token tiers
 
 The proxy does **not** connect to any platform directly.
 Each platform needs its own adapter that receives messages from that platform and forwards them here.
-Bot adapters are not included yet — see [Bot adapters](#bot-adapters) below.
-
----
 
 ## Session flow
 
@@ -29,8 +26,6 @@ All messages   → LLM queries meMCP tools, returns natural-language reply
 /disconnect    → clear session
 /status        → show state and backend info
 ```
-
----
 
 ## Setup
 
@@ -87,15 +82,11 @@ uvicorn proxy:app --port 8001   # local dev
 
 ## Bot adapters
 
-Each adapter lives in `connectors/<platform>/bot.py`.
-All three are implemented. Each one:
-1. Connects to the platform (long-polling / Socket Mode / Gateway)
-2. On every incoming message: `POST /chat` to the proxy
-3. Sends the reply back to the user
+- each adapter connects to the particular platform via long-polling, Socket Mode or Gateway
+- on every incoming message: `POST /chat` to the proxy
+- the proxy manages the conversation state and LLM interactions, then returns a reply that the adapter sends back to the user on the platform.
 
 `chat_id` is namespaced per platform (`tg_…`, `slack_…`, `discord_…`) so sessions never collide.
-
----
 
 ### Telegram
 
@@ -199,7 +190,7 @@ The bot responds to DMs and to messages that @mention it in a channel.
 
 ```bash
 cd connectors
-docker compose up          # proxy + all three bots
+docker compose up
 ```
 
 Only include the adapters you need — comment out unused services in `docker-compose.yml`.

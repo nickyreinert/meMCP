@@ -6,10 +6,40 @@ Includes a flexible scraper framework with optional built-in LLM-powered content
 
 For your convenience look at the [meMCP Skill](skills/meMCP-SKILL.md) for how to interact with this server programmatically, e.g., via an LLM agent or external scripts.
 
+## TOC
+- [meMCP](#memcp)
+  - [TOC](#toc)
+  - [Features](#features)
+  - [Available Scrapers](#available-scrapers)
+  - [Data Model](#data-model)
+  - [Quick Start](#quick-start)
+    - [1. Install Dependencies](#1-install-dependencies)
+    - [2. Configure](#2-configure)
+    - [3. Ingest Data](#3-ingest-data)
+    - [4. Calculate Metrics (Optional)](#4-calculate-metrics-optional)
+    - [5. Run Server](#5-run-server)
+  - [Configuration](#configuration)
+    - [Basic Settings](#basic-settings)
+    - [Scraper Modules](#scraper-modules)
+      - [LinkedIn Profile (PDF Export)](#linkedin-profile-pdf-export)
+      - [Medium.com](#mediumcom)
+    - [Generic RSS/Atom Feeds](#generic-rssatom-feeds)
+    - [Sitemap Scraper (Multi-Entity)](#sitemap-scraper-multi-entity)
+    - [HTML Scraper (Single-Entity)](#html-scraper-single-entity)
+    - [Static Manual Data](#static-manual-data)
+  - [Backend](#backend)
+    - [LLM Selection](#llm-selection)
+    - [Running the Server](#running-the-server)
+  - [Chat Connectors](#chat-connectors)
+  - [API Endpoints](#api-endpoints)
+  - [Data Storage](#data-storage)
+  - [Planned Features](#planned-features)
+  - [License](#license)
 ## Features
 
 - Three-Tier access system (public, private, elevated) with token-based authentication
-- integretaion of LLMs as endpoints for real time interactions, like *job interview prep* or *project brainstorming* based on the data in the MCP
+  - elevated access allows access to a LLM powered endpoint for real time interactions, like *job interview prep* or *project brainstorming* based on the data in the MCP
+  - owner can decide what endpoints are publicly available
 - Aggregates data from GitHub, Medium, RSS feeds, Sitemaps, LinkedIn, by plain HTML scraping or manual YAML files
 - LLM-powered content extraction and enrichment (e.g., summarization, tag extraction, skill/technology classification)
 - Entity graph with relationships
@@ -30,7 +60,7 @@ For your convenience look at the [meMCP Skill](skills/meMCP-SKILL.md) for how to
   - `relevance` (a composite score based on the above metrics to indicate overall relevance of a skill/technology/tag in the profile)
 - Multi-language support (EN, DE, ...) with automatic detection and translation of content
 
-## Available Connectors
+## Available Scrapers
 
 | Connector | Purpose | Config Example |
 |-----------|---------|----------------|
@@ -442,6 +472,10 @@ curl http://localhost:8000/health
 # View API documentation
 open http://localhost:8000/docs
 ```
+
+## Chat Connectors
+
+please refer to [Connectors](connectors/README.md) on how to connect this MCP server to various chat platforms (e.g., Slack, Discord) for real-time interactions.
 
 ## API Endpoints
 
