@@ -25,6 +25,8 @@ services:
     volumes:
       - proxy_data:/data
       - ../config.tech.yaml:/config/config.tech.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux: resolves to Docker host IP
     environment:
       - CONFIG_PATH=/config/config.tech.yaml
       # Docker-specific overrides — paths differ from local-dev config.yaml values
