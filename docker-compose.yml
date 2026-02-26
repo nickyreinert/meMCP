@@ -43,14 +43,10 @@ services:
       - ./config.tech.yaml:/app/config.tech.yaml:ro
       - ./config.content.yaml:/app/config.content.yaml
       - ./.cache:/app/.cache
+    env_file:
+      - .env
     environment:
       - TZ=Europe/Berlin
-      # Admin credentials — CHANGE THESE before deploying
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=changeme
-      - ADMIN_SECRET_KEY=changeme-generate-a-real-secret
-      # Optional: restrict CORS origins (comma-separated)
-      # - ADMIN_CORS_ORIGINS=https://admin.example.com
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/admin/"]
       interval: 30s

@@ -1,16 +1,8 @@
-# Admin Backend Implementation Summary
-
-## Overview
-The admin backend provides a secure, isolated administrative interface for the MCP server, running as a separate Docker container on port 8081.
-
-## Architecture
-- **Framework**: FastAPI
-- **Port**: 8081 (separate Docker container)
-- **Authentication**: JWT-based with env-var credentials
-- **Database**: Shares `db/profile.db` with main server via Docker volume
-- **Config**: Reads/writes `config.content.yaml` for source management
+# Admin Backend Quick Reference
 
 ## Configuration (Environment Variables)
+
+- set those variables in `.env`file
 
 | Variable | Default | Description |
 |----------|---------|-------------|
