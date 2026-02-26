@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>meMCP Admin</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     LOGIN
+═══════════════════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <p class="brand">meMCP</p>
+    <h1>Admin Panel</h1>
+    <div id="login-error" class="alert alert-error" style="display:none"></div>
+    <form id="login-form">
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="l-user" value="admin" required autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="l-pass" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" id="login-btn">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     APP
+═══════════════════════════════════════════════════════ -->
+<div id="app">
+
+  <header id="app-header">
+    <span class="brand">meMCP Admin</span>
+    <nav id="main-nav">
+      <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+      <button class="nav-btn" data-tab="tokens">Tokens</button>
+      <button class="nav-btn" data-tab="logs">Logs</button>
+      <button class="nav-btn" data-tab="database">Database</button>
+      <button class="nav-btn" data-tab="sources">Sources</button>
+      <button class="nav-btn" data-tab="jobs">Jobs</button>
+    </nav>
+    <button class="nav-logout" id="logout-btn">Logout</button>
+  </header>
+
+  <div id="app-content">
+
+    <!-- ── DASHBOARD ──────────────────────────────── -->
+    <div id="tab-dashboard" class="tab active">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="s-entities">—</div>
+          <div class="stat-label">Total Entities</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="s-tok-active">—</div>
+          <div class="stat-label">Active Tokens</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="s-tok-total">—</div>
+          <div class="stat-label">Total Tokens</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="s-jobs-running">—</div>
+          <div class="stat-label">Running Jobs</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+        <div class="card">
+          <div class="card-title mb-12">Entities by Flavor</div>
+          <div id="dash-flavors"></div>
+        </div>
+        <div class="card">
+          <div class="card-title mb-12">Tags Overview</div>
+          <div id="dash-tags"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── TOKENS ─────────────────────────────────── -->
+    <div id="tab-tokens" class="tab">
+      <div class="card">
+        <div class="card-title mb-12">Create New Token</div>
+        <form id="tok-form" class="form-row">
+          <div class="field field-md">
+            <label>Owner</label>
+            <input type="text" id="tok-owner" placeholder="e.g. claude" required>
+          </div>
+          <div class="field field-sm">
+            <label>Days valid</label>
+            <input type="number" id="tok-days" value="30" min="1" max="3650">
+          </div>
+          <div class="field field-sm">
+            <label>Tier</label>
+            <select id="tok-tier">
+              <option value="mcp">mcp</option>
+              <option value="chat">chat</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">Create Token</button>
+        </form>
+        <div id="tok-result"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">All Tokens</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadTokens()">Refresh</button>
+        </div>
+        <div id="tokens-table" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── LOGS ───────────────────────────────────── -->
+    <div id="tab-logs" class="tab">
+      <div class="two-col">
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Log Files</div>
+              <button class="btn btn-ghost btn-sm" onclick="loadLogs()">Refresh</button>
+            </div>
+            <div id="log-files"></div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title" id="log-viewer-name">Select a file</div>
+              <button class="btn btn-ghost btn-sm" id="log-reload-btn"
+                style="display:none" onclick="reloadLog()">Reload</button>
+            </div>
+            <div id="log-viewer" class="log-viewer" style="min-height:200px; color:#585b70">
+Select a log file on the left to view its contents.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DATABASE ───────────────────────────────── -->
+    <div id="tab-database" class="tab">
+      <div class="card">
+        <div class="card-title mb-12">Browse Entities</div>
+        <div class="form-row">
+          <div class="field field-sm">
+            <label>Flavor</label>
+            <select id="db-flavor">
+              <option value="">All</option>
+              <option value="personal">personal</option>
+              <option value="stages">stages</option>
+              <option value="oeuvre">oeuvre</option>
+              <option value="identity">identity</option>
+            </select>
+          </div>
+          <div class="field field-md">
+            <label>Category</label>
+            <input type="text" id="db-category" placeholder="e.g. project">
+          </div>
+          <div class="field field-lg">
+            <label>Search</label>
+            <input type="text" id="db-search" placeholder="Full-text search…">
+          </div>
+          <div class="field field-md">
+            <label>Tag</label>
+            <input type="text" id="db-tag" placeholder="e.g. python">
+          </div>
+          <div class="field field-sm">
+            <label>Limit</label>
+            <input type="number" id="db-limit" value="50" min="1" max="500" style="width:72px">
+          </div>
+          <button class="btn btn-primary" onclick="browseDB(0)">Search</button>
+        </div>
+        <div id="db-results" class="table-wrap"></div>
+        <div id="db-pagination" class="flex gap-8 mt-12"></div>
+      </div>
+    </div>
+
+    <!-- ── SOURCES ────────────────────────────────── -->
+    <div id="tab-sources" class="tab">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Sources (config.content.yaml)</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadSources()">Refresh</button>
+        </div>
+        <div id="sources-table" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── JOBS ───────────────────────────────────── -->
+    <div id="tab-jobs" class="tab">
+      <div class="card">
+        <div class="card-title mb-12">Trigger Scraping Job</div>
+        <form id="scrape-form">
+          <div class="form-row mb-8">
+            <div class="field field-lg">
+              <label>Source (leave empty for all)</label>
+              <input type="text" id="j-source" placeholder="e.g. github, blog, linkedin">
+            </div>
+          </div>
+          <div class="flex gap-12 flex-wrap mb-16">
+            <label class="checkbox-row">
+              <input type="checkbox" id="j-force"> Force re-scrape
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="j-no-llm"> Disable LLM
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="j-llm-only"> LLM only
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="j-yaml"> Export YAML
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Start Job</button>
+        </form>
+        <div id="scrape-result"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Jobs</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadJobs()">Refresh</button>
+        </div>
+        <div id="jobs-table" class="table-wrap"></div>
+      </div>
+    </div>
+
+  </div><!-- /app-content -->
+</div><!-- /app -->
+
+<!-- ═══════════════════════════════════════════════════════
+     MODAL
+═══════════════════════════════════════════════════════ -->
+<div id="modal-overlay" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title"></h3>
+      <button class="modal-close" id="modal-close-btn">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="modal-footer-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

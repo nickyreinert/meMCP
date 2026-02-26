@@ -5,8 +5,13 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 import logging
 import os
+from pathlib import Path
+
+_STATIC = Path(__file__).parent / "static"
+_MIME = {".html": "text/html", ".css": "text/css", ".js": "application/javascript"}
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,26 @@ def create_admin_app() -> FastAPI:
     # Include admin routers at root (runs on its own subdomain, no prefix needed)
     from admin.routers import admin as admin_router
     app.include_router(admin_router.router, tags=["admin"])
+
+    # Serve the admin UI at /ui (no auth — login is handled client-side)
+    @app.get("/ui", include_in_schema=False)
+    async def ui_index():
+        return Response(
+            content=(_STATIC / "index.html").read_bytes(),
+            media_type="text/html",
+        )
+
+    @app.get("/ui/{filename}", include_in_schema=False)
+    async def ui_static(filename: str):
+        safe = Path(filename).name   # strip any path traversal
+        path = _STATIC / safe
+        if not path.exists() or not path.is_file():
+            return Response(status_code=404)
+        suffix = path.suffix.lower()
+        return Response(
+            content=path.read_bytes(),
+            media_type=_MIME.get(suffix, "application/octet-stream"),
+        )
 
     logger.info("Admin backend application initialized successfully")
     return app
