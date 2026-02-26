@@ -3,18 +3,12 @@
 # Main functions: create_admin_app()
 # Dependent files: admin/routers/admin.py, admin/dependencies/access_control.py
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import logging
 import os
 
 logger = logging.getLogger(__name__)
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
 
 def create_admin_app() -> FastAPI:
@@ -25,9 +19,9 @@ def create_admin_app() -> FastAPI:
         title="MCP Admin Backend",
         description="Administrative interface for MCP server",
         version="1.0.0",
-        docs_url="/admin/docs",
-        redoc_url="/admin/redoc",
-        openapi_url="/admin/openapi.json",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
     )
 
     # CORS — configurable via env var (comma-separated origins)
@@ -42,40 +36,15 @@ def create_admin_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # --- Login endpoint (on app root, not behind auth) ---
-
-    @app.post("/admin/login")
-    async def admin_login(body: LoginRequest):
-        """
-        Authenticate with admin credentials and receive a JWT.
-        Set ADMIN_USERNAME and ADMIN_PASSWORD env vars to enable.
-        """
-        from admin.dependencies.access_control import (
-            authenticate_admin,
-            create_access_token,
-        )
-
-        if not authenticate_admin(body.username, body.password):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid admin credentials",
-            )
-
-        token = create_access_token(subject=body.username)
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-        }
-
-    # Include admin routers (all other endpoints require JWT via Depends)
+    # Include admin routers at root (runs on its own subdomain, no prefix needed)
     from admin.routers import admin as admin_router
-    app.include_router(admin_router.router, prefix="/admin", tags=["admin"])
+    app.include_router(admin_router.router, tags=["admin"])
 
     logger.info("Admin backend application initialized successfully")
     return app
 
 
-# Allow gunicorn to call create_admin_app() as a factory
+# Module-level app for gunicorn: `gunicorn admin.main:app`
 app = create_admin_app()
 
 
