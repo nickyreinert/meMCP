@@ -14,7 +14,7 @@ Usage:
 Commands:
   add      Create a new access token (generates a secure random value).
            Use --tier to set the tier: 'mcp' (direct API access) or 'chat' (proxy auth).
-  budget   Set per-token budget overrides (NULL = use config.yaml defaults).
+  budget   Set per-token budget overrides (NULL = use config.tech.yaml defaults).
            --max-tokens  Max LLM output tokens per session (default: 4000)
            --max-calls   Max API calls per day (default: 20)
            --max-input   Max input chars before truncation (default: 2000)
@@ -193,7 +193,7 @@ def cmd_budget(args):
     print(_bold(f"  Budget updated for token #{token_id} ({row['owner_name']})"))
     for col, val in updates:
         print(f"  {col:<28} {_cyan(str(val))}")
-    print(_dim("  NULL values inherit from config.yaml global defaults."))
+    print(_dim("  NULL values inherit from config.tech.yaml global defaults."))
     print()
 
 

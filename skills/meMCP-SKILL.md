@@ -19,7 +19,7 @@ Interact with a running meMCP server — a FastAPI-based personal profile MCP se
 Before doing anything, ask the user for these if not already provided in the conversation:
 
 1. **Server URL** — e.g. `http://localhost:8000` or `https://mymcp.example.com`
-2. **Token** — for protected endpoints (admin or elevated access token from `config.yaml`)
+2. **Token** — for protected endpoints (admin or elevated access token from `config.tech.yaml`)
 
 Store these mentally for the session. Never hardcode them in output.
 
@@ -230,5 +230,5 @@ These are called via `POST /mcp/call` or dedicated routes — check `/mcp/tools`
 - Always start with `GET /health` to verify connectivity
 - Use `GET /prompts` to discover what the server owner has configured as intended use cases
 - Use `GET /mcp/resources` to discover all browsable data endpoints
-- Token scope: the `admin_token` in `config.yaml` is the elevated token; other tokens may be more limited
+- Token scope: the `admin_token` in `config.tech.yaml` is the elevated token; other tokens may be more limited
 - Pagination: use `?page=N&limit=M` on `/entities` for large datasets

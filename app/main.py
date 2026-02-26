@@ -201,7 +201,7 @@ async def endpoint_protection_middleware(request: Request, call_next):
     """
     Config-driven access control gate.
 
-    Reads ``protected_endpoints`` from config.yaml and enforces the required
+    Reads ``protected_endpoints`` from config.tech.yaml and enforces the required
     token tier for each listed path before any route handler or session-tracking
     middleware runs. Unlisted paths pass through without restriction.
     """
@@ -987,7 +987,7 @@ async def coverage_report(request: Request, conn=Depends(db)):
             "total_entities": total,
             "fetched_entities": 0,
             "coverage_is_relevant": False,
-            "message": "Session tracking is disabled in config.yaml"
+            "message": "Session tracking is disabled in config.tech.yaml"
         })
     
     client_ip = request.client.host if request.client else "unknown"

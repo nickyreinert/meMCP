@@ -15,7 +15,7 @@ Added `medium_raw` connector to parse raw HTML dumps of Medium profile pages, by
 - `scrapers/base.py` - Registered `medium_raw` in ScraperFactory, removed Playwright
 - `scrapers/sitemap.py` - Removed Playwright dependency
 - `scrapers/manual.py` - Removed Playwright dependency
-- `config.yaml` - Updated medium source to use new connector
+- `config.content.yaml` - Updated medium source to use new connector
 - `requirements.txt` - Removed Playwright
 - `README.md` - Documented available connectors, removed Playwright install
 

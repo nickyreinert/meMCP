@@ -18,8 +18,7 @@ log = logging.getLogger("mcp.ingest")
 
 def load_config(path: str = None):
     from config_loader import load_config as _load
-    if path and path != "config.yaml":
-        # explicit legacy path — fall back to direct load
+    if path:
         import yaml
         with open(path) as f:
             return yaml.safe_load(f)

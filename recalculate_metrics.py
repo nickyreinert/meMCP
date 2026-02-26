@@ -26,7 +26,7 @@ Usage:
   python recalculate_metrics.py --verbose
 
 Process:
-  1. Load metrics configuration from config.yaml
+  1. Load metrics configuration from config.tech.yaml
   2. Connect to profile database
   3. Collect all distinct (tag, tag_type) pairs from entities
   4. Calculate metrics for each tag (proficiency, frequency, diversity, etc.)
@@ -129,7 +129,7 @@ def recalculate(tag_type: str = None,
     log_message("Starting metrics recalculation...", "INFO")
     
     if not CONFIG.get("enabled", True):
-        log_message("Metrics calculation is disabled in config.yaml", "ERROR")
+        log_message("Metrics calculation is disabled in config.tech.yaml", "ERROR")
         return 1
     
     # Ensure database is initialized

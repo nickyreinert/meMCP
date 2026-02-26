@@ -15,9 +15,9 @@ Main functions:
 
 Dependencies:
   - db/models.py: Database access and entity queries
-  - config.yaml: Metric formula configuration
+  - config.tech.yaml: Metric formula configuration
 
-Metric formulas (all customizable via config.yaml):
+Metric formulas (all customizable via config.tech.yaml):
   - proficiency: Recency-weighted experience (0-100)
   - experience_years: Total time using skill/tech
   - entity_count: Number of entities with tag

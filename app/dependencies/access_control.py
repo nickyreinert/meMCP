@@ -89,7 +89,7 @@ def _path_matches_any(path: str, patterns: List[str]) -> bool:
 def get_required_level(path: str, protected_config: dict) -> Optional[str]:
     """
     Determine the required access level for *path* from the
-    ``protected_endpoints`` block in config.yaml.
+    ``protected_endpoints`` block in config.tech.yaml.
 
     Returns:
         ``STAGE_MCP``  — path is in ``mcp_required`` (or legacy ``private_required``) list.
@@ -113,7 +113,7 @@ class TokenInfo:
     id:         int
     owner_name: str
     stage:      str          # STAGE_MCP | STAGE_CHAT
-    # Per-token budget overrides (None = use global defaults from config.yaml)
+    # Per-token budget overrides (None = use global defaults from config.tech.yaml)
     max_tokens_per_session:  Optional[int] = None
     max_calls_per_day:       Optional[int] = None
     max_input_chars:         Optional[int] = None
@@ -403,7 +403,7 @@ def _forbidden_json(stage: str, message: str):
 def build_endpoint_guard(protected_config: dict):
     """
     Build an async HTTP middleware function that enforces config-driven access
-    control based on the ``protected_endpoints`` block from config.yaml.
+    control based on the ``protected_endpoints`` block from config.tech.yaml.
 
     Behaviour
     ---------

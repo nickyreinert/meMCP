@@ -7,4 +7,4 @@
 
 **Dependent files**:
 - `db/models.py`: Database operations
-- `config.yaml`: Metric formula configuration
+- `config.tech.yaml`: Metric formula configuration

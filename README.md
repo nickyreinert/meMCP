@@ -133,7 +133,7 @@ pip install -r requirements.txt
 
 ### 2. Configure
 
-Edit `config.yaml` to set:
+Edit `config.tech.yaml` (infrastructure) and `config.content.yaml` (identity & sources) to set:
 - Your static identity information
 - LLM backend (Remote AI provider or locally, like **Ollama**)
 - Data sources (GitHub, Medium, blogs, etc.)
@@ -199,7 +199,7 @@ Server will be available at: **http://localhost:8000**
 
 ### Basic Settings
 
-Key settings in `config.yaml`:
+Key settings in `config.tech.yaml` and `config.content.yaml`:
 
 ```yaml
 server:
@@ -448,7 +448,7 @@ entities:
 ```bash
 pip install groq
 export GROQ_API_KEY=gsk_...
-# Update config.yaml: llm.backend = groq
+# Update config.tech.yaml: llm.backend = groq
 ```
 
 **Option 2: Ollama**
@@ -457,7 +457,7 @@ export GROQ_API_KEY=gsk_...
 brew install ollama
 ollama serve
 ollama pull mistral-small:24b-instruct-2501-q4_K_M
-# Update config.yaml: llm.backend = ollama
+# Update config.tech.yaml: llm.backend = ollama
 ```
 
 ### Running the Server

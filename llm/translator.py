@@ -45,7 +45,7 @@ from llm.enricher import LLMEnricher
 
 def load_cfg(path: str = None) -> dict:
     from config_loader import load_config as _load
-    if path and path != "config.yaml":
+    if path:
         with open(path) as f:
             return yaml.safe_load(f)
     return _load()
@@ -157,7 +157,7 @@ def translate_greeting(conn: sqlite3.Connection, enricher: LLMEnricher,
                        force: bool = False, dry_run: bool = False) -> bool:
     """
     Translate the static greeting/identity text.
-    Source text comes from config.yaml (identity section).
+    Source text comes from config.content.yaml (identity section).
     """
     if not force and get_greeting_translation(conn, target_lang):
         log.info(f"Greeting already translated to {target_lang}, skipping")
@@ -200,7 +200,7 @@ def run(args: argparse.Namespace, cfg: dict):
 
     if enricher.backend == "none":
         log.error("LLM backend is 'none' — translation requires GROQ or Ollama. "
-                  "Set llm.backend in config.yaml or export GROQ_API_KEY.")
+                  "Set llm.backend in config.tech.yaml or export GROQ_API_KEY.")
         sys.exit(1)
 
     # Determine which languages to process
