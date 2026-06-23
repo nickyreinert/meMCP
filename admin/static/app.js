@@ -464,7 +464,12 @@ async function loadLogs() {
       document.getElementById('log-files').innerHTML = '<div class="empty">No log files.</div>';
       return;
     }
-    document.getElementById('log-files').innerHTML = data.logs.map(f => `
+    const visibleLogs = data.logs.filter(f => f.name !== '.gitkeep');
+    if (!visibleLogs.length) {
+      document.getElementById('log-files').innerHTML = '<div class="empty">No log files.</div>';
+      return;
+    }
+    document.getElementById('log-files').innerHTML = visibleLogs.map(f => `
       <div class="file-item" id="file-${_esc(f.name)}" onclick="viewLog('${_esc(f.name)}')">
         <div>
           <div class="file-name">${_esc(f.name)}</div>
@@ -503,6 +508,126 @@ function reloadLog() {
 // ────────────────────────────────────────────────────────
 // DATABASE BROWSER + ENTITY EDITING
 // ────────────────────────────────────────────────────────
+
+let _dbCurrentView = 'table';
+
+function setDbView(view) {
+  _dbCurrentView = view;
+  document.getElementById('db-view-table').style.display = view === 'table' ? '' : 'none';
+  document.getElementById('db-view-career').style.display = view === 'career' ? '' : 'none';
+  document.getElementById('db-view-table-btn').style.fontWeight = view === 'table' ? '600' : '';
+  document.getElementById('db-view-career-btn').style.fontWeight = view === 'career' ? '600' : '';
+  if (view === 'career') loadCareerView();
+}
+
+async function loadCareerView() {
+  const el = document.getElementById('career-render');
+  el.innerHTML = '<div class="loading-block"><span class="spinner"></span> Loading…</div>';
+  try {
+    const [stagesData, oeuvreData, identityData] = await Promise.all([
+      api('GET', '/db?flavor=stages&limit=500'),
+      api('GET', '/db?flavor=oeuvre&limit=500'),
+      api('GET', '/db?flavor=identity&limit=50'),
+    ]);
+
+    let html = '';
+
+    // ── Identity / Profile ──────────────────────────────
+    const identity = (identityData?.entities || []);
+    if (identity.length) {
+      const intro = identity.find(e => e.category === 'intro' || e.title?.toLowerCase().includes('bio') || e.title?.toLowerCase().includes('about'));
+      const contact = identity.find(e => e.category === 'contact' || e.title?.toLowerCase().includes('contact'));
+      if (intro || contact) {
+        html += `<div class="card mb-12">
+          <div class="card-title mb-8">Profile</div>
+          ${intro ? `<p style="margin-bottom:8px">${_esc(intro.description || intro.title || '')}</p>` : ''}
+          ${contact ? `<p class="text-muted text-sm">${_esc(contact.description || contact.title || '')}</p>` : ''}
+        </div>`;
+      }
+    }
+
+    // ── Career Stages ───────────────────────────────────
+    const stages = (stagesData?.entities || []).sort((a, b) => {
+      const da = a.start_date || a.date || '';
+      const db2 = b.start_date || b.date || '';
+      return db2.localeCompare(da);
+    });
+
+    const catOrder = ['job', 'education', 'other'];
+    const catLabel = { job: 'Work Experience', education: 'Education', other: 'Other' };
+    const grouped = {};
+    for (const e of stages) {
+      const cat = e.category || 'other';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(e);
+    }
+
+    for (const cat of catOrder) {
+      const items = grouped[cat];
+      if (!items?.length) continue;
+      html += `<div class="card mb-12">
+        <div class="card-title mb-12">${_esc(catLabel[cat] || cat)}</div>
+        <div class="timeline">`;
+      for (const e of items) {
+        const start = e.start_date ? e.start_date.slice(0, 7) : '';
+        const end = e.end_date ? e.end_date.slice(0, 7) : (e.is_current ? 'present' : '');
+        const dateStr = start ? (end ? `${start} – ${end}` : start) : '';
+        const tagList = [...(e.technologies || []), ...(e.skills || []), ...(e.tags || [])].slice(0, 8);
+        html += `<div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div class="timeline-body">
+            <div class="timeline-title">${_esc(e.title || '—')}</div>
+            ${dateStr ? `<div class="timeline-date">${_esc(dateStr)}</div>` : ''}
+            ${e.description ? `<div class="timeline-desc text-sm">${_esc(e.description)}</div>` : ''}
+            ${tagList.length ? `<div class="timeline-tags">${tagList.map(t => `<span class="badge badge-generic">${_esc(t)}</span>`).join('')}</div>` : ''}
+          </div>
+        </div>`;
+      }
+      html += '</div></div>';
+    }
+
+    // ── Oeuvre ──────────────────────────────────────────
+    const oeuvre = (oeuvreData?.entities || []).sort((a, b) => {
+      const da = a.date || a.start_date || '';
+      const db2 = b.date || b.start_date || '';
+      return db2.localeCompare(da);
+    });
+
+    const oeuvreOrder = ['coding', 'blog_post', 'article', 'book', 'website', 'other'];
+    const oeuvreLabel = { coding: 'Projects & Code', blog_post: 'Blog Posts', article: 'Articles', book: 'Books', website: 'Websites', other: 'Other Work' };
+    const oeuvreGrouped = {};
+    for (const e of oeuvre) {
+      const cat = e.category || 'other';
+      if (!oeuvreGrouped[cat]) oeuvreGrouped[cat] = [];
+      oeuvreGrouped[cat].push(e);
+    }
+
+    const oeuvreCategories = [...new Set([...oeuvreOrder, ...Object.keys(oeuvreGrouped)])];
+    for (const cat of oeuvreCategories) {
+      const items = oeuvreGrouped[cat];
+      if (!items?.length) continue;
+      html += `<div class="card mb-12">
+        <div class="card-title mb-12">${_esc(oeuvreLabel[cat] || cat)} <span class="text-muted" style="font-weight:normal;font-size:0.85em">(${items.length})</span></div>
+        <div class="oeuvre-grid">`;
+      for (const e of items) {
+        const dateStr = (e.date || e.start_date || '').slice(0, 7);
+        const tagList = [...(e.technologies || []), ...(e.skills || [])].slice(0, 5);
+        html += `<div class="oeuvre-card">
+          <div class="oeuvre-title">${e.url ? `<a href="${_esc(e.url)}" target="_blank">${_esc(e.title || '—')}</a>` : _esc(e.title || '—')}</div>
+          ${dateStr ? `<div class="text-muted text-sm">${_esc(dateStr)}</div>` : ''}
+          ${e.description ? `<div class="text-sm" style="margin-top:4px;opacity:0.85">${_esc(e.description.slice(0, 160))}${e.description.length > 160 ? '…' : ''}</div>` : ''}
+          ${tagList.length ? `<div style="margin-top:6px">${tagList.map(t => `<span class="badge badge-generic">${_esc(t)}</span>`).join('')}</div>` : ''}
+        </div>`;
+      }
+      html += '</div></div>';
+    }
+
+    el.innerHTML = html || '<div class="empty">No data found.</div>';
+  } catch (ex) {
+    el.innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
+  }
+}
+
 async function browseDB(offset) {
   if (offset == null) offset = 0;
   _dbOffset = offset;

@@ -40,10 +40,12 @@
     <nav id="main-nav">
       <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
       <button class="nav-btn" data-tab="tokens">Tokens</button>
-      <button class="nav-btn" data-tab="logs">Logs</button>
       <button class="nav-btn" data-tab="database">Database</button>
       <button class="nav-btn" data-tab="sources">Sources</button>
+      <button class="nav-btn" data-tab="prompts">Prompts</button>
+      <button class="nav-btn" data-tab="settings">Settings</button>
       <button class="nav-btn" data-tab="jobs">Jobs</button>
+      <button class="nav-btn" data-tab="logs">Logs</button>
     </nav>
     <button class="nav-logout" id="logout-btn">Logout</button>
   </header>
@@ -52,6 +54,10 @@
 
     <!-- ── DASHBOARD ──────────────────────────────── -->
     <div id="tab-dashboard" class="tab active">
+      <div class="card-head" style="margin-bottom:16px">
+        <div class="card-title">Dashboard</div>
+        <button class="btn btn-ghost btn-sm" onclick="_startWizard()">Setup Wizard</button>
+      </div>
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-value" id="s-entities">—</div>
@@ -80,6 +86,7 @@
           <div id="dash-tags"></div>
         </div>
       </div>
+      <div class="card mt-12" id="dash-seed-status"></div>
     </div>
 
     <!-- ── TOKENS ─────────────────────────────────── -->
@@ -115,67 +122,57 @@
       </div>
     </div>
 
-    <!-- ── LOGS ───────────────────────────────────── -->
-    <div id="tab-logs" class="tab">
-      <div class="two-col">
-        <div>
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title">Log Files</div>
-              <button class="btn btn-ghost btn-sm" onclick="loadLogs()">Refresh</button>
-            </div>
-            <div id="log-files"></div>
-          </div>
-        </div>
-        <div>
-          <div class="card">
-            <div class="card-head">
-              <div class="card-title" id="log-viewer-name">Select a file</div>
-              <button class="btn btn-ghost btn-sm" id="log-reload-btn"
-                style="display:none" onclick="reloadLog()">Reload</button>
-            </div>
-            <div id="log-viewer" class="log-viewer" style="min-height:200px; color:#585b70">
-Select a log file on the left to view its contents.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- ── DATABASE ───────────────────────────────── -->
     <div id="tab-database" class="tab">
-      <div class="card">
-        <div class="card-title mb-12">Browse Entities</div>
-        <div class="form-row">
-          <div class="field field-sm">
-            <label>Flavor</label>
-            <select id="db-flavor">
-              <option value="">All</option>
-              <option value="personal">personal</option>
-              <option value="stages">stages</option>
-              <option value="oeuvre">oeuvre</option>
-              <option value="identity">identity</option>
-            </select>
-          </div>
-          <div class="field field-md">
-            <label>Category</label>
-            <input type="text" id="db-category" placeholder="e.g. project">
-          </div>
-          <div class="field field-lg">
-            <label>Search</label>
-            <input type="text" id="db-search" placeholder="Full-text search…">
-          </div>
-          <div class="field field-md">
-            <label>Tag</label>
-            <input type="text" id="db-tag" placeholder="e.g. python">
-          </div>
-          <div class="field field-sm">
-            <label>Limit</label>
-            <input type="number" id="db-limit" value="50" min="1" max="500" style="width:72px">
-          </div>
-          <button class="btn btn-primary" onclick="browseDB(0)">Search</button>
+      <div class="card-head" style="margin-bottom:16px">
+        <div class="card-title">Database</div>
+        <div class="flex gap-8">
+          <button class="btn btn-ghost btn-sm" id="db-view-table-btn" onclick="setDbView('table')" style="font-weight:600">Table</button>
+          <button class="btn btn-ghost btn-sm" id="db-view-career-btn" onclick="setDbView('career')">Career View</button>
         </div>
-        <div id="db-results" class="table-wrap"></div>
-        <div id="db-pagination" class="flex gap-8 mt-12"></div>
+      </div>
+
+      <!-- TABLE VIEW -->
+      <div id="db-view-table">
+        <div class="card">
+          <div class="card-title mb-12">Browse Entities</div>
+          <div class="form-row">
+            <div class="field field-sm">
+              <label>Flavor</label>
+              <select id="db-flavor">
+                <option value="">All</option>
+                <option value="personal">personal</option>
+                <option value="stages">stages</option>
+                <option value="oeuvre">oeuvre</option>
+                <option value="identity">identity</option>
+              </select>
+            </div>
+            <div class="field field-md">
+              <label>Category</label>
+              <input type="text" id="db-category" placeholder="e.g. project">
+            </div>
+            <div class="field field-lg">
+              <label>Search</label>
+              <input type="text" id="db-search" placeholder="Full-text search…">
+            </div>
+            <div class="field field-md">
+              <label>Tag</label>
+              <input type="text" id="db-tag" placeholder="e.g. python">
+            </div>
+            <div class="field field-sm">
+              <label>Limit</label>
+              <input type="number" id="db-limit" value="50" min="1" max="500" style="width:72px">
+            </div>
+            <button class="btn btn-primary" onclick="browseDB(0)">Search</button>
+          </div>
+          <div id="db-results" class="table-wrap"></div>
+          <div id="db-pagination" class="flex gap-8 mt-12"></div>
+        </div>
+      </div>
+
+      <!-- CAREER VIEW -->
+      <div id="db-view-career" style="display:none">
+        <div id="career-render"></div>
       </div>
     </div>
 
@@ -183,17 +180,87 @@ Select a log file on the left to view its contents.</div>
     <div id="tab-sources" class="tab">
       <div class="card">
         <div class="card-head">
-          <div class="card-title">Sources (config.content.yaml)</div>
-          <button class="btn btn-ghost btn-sm" onclick="loadSources()">Refresh</button>
+          <div class="card-title">Data Sources</div>
+          <div class="flex gap-8">
+            <button class="btn btn-ghost btn-sm" onclick="loadSources()">Refresh</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddSourceForm()">Add Source</button>
+          </div>
         </div>
         <div id="sources-table" class="table-wrap"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">File Upload</div>
+        </div>
+        <form id="upload-form" class="form-row">
+          <div class="field field-lg">
+            <label>PDF or HTML file</label>
+            <input type="file" id="upload-file" accept=".pdf,.html,.htm">
+          </div>
+          <div class="field field-md">
+            <label>Link to source (optional)</label>
+            <input type="text" id="upload-source" placeholder="e.g. oeuvre.medium">
+          </div>
+          <button type="submit" class="btn btn-primary">Upload</button>
+        </form>
+        <div id="upload-result"></div>
+      </div>
+    </div>
+
+    <!-- ── PROMPTS ────────────────────────────────── -->
+    <div id="tab-prompts" class="tab">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">LLM System Prompts</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadPrompts()">Refresh</button>
+        </div>
+        <p class="text-muted text-sm mb-12">System prompts used internally for LLM enrichment, translation, and chat.</p>
+        <div id="prompts-list"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head">
+          <div class="card-title">MCP Prompt Templates</div>
+          <div class="flex gap-8">
+            <button class="btn btn-primary btn-sm" onclick="addMcpPrompt()">+ Add</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadMcpPrompts()">Refresh</button>
+          </div>
+        </div>
+        <p class="text-muted text-sm mb-12">User-facing prompt templates discoverable by LLM agents via <code>/prompts</code> API.</p>
+        <div id="mcp-prompts-list"></div>
+      </div>
+    </div>
+
+    <!-- ── SETTINGS ───────────────────────────────── -->
+    <div id="tab-settings" class="tab">
+      <!-- Chat Config -->
+      <div class="card">
+        <div class="card-title mb-12">Chat Proxy Settings</div>
+        <div id="chat-config-form"></div>
+      </div>
+      <!-- Identity -->
+      <div class="card">
+        <div class="card-title mb-12">Identity</div>
+        <div id="identity-config-form"></div>
+      </div>
+      <!-- i18n -->
+      <div class="card">
+        <div class="card-title mb-12">Internationalization (i18n)</div>
+        <div id="i18n-config-form"></div>
+      </div>
+      <!-- Metrics -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Metrics Configuration</div>
+          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/recalculate-metrics', 'Recalculate')">Recalculate Metrics</button>
+        </div>
+        <div id="metrics-config-form"></div>
       </div>
     </div>
 
     <!-- ── JOBS ───────────────────────────────────── -->
     <div id="tab-jobs" class="tab">
       <div class="card">
-        <div class="card-title mb-12">Trigger Scraping Job</div>
+        <div class="card-title mb-12">Trigger Job</div>
         <form id="scrape-form">
           <div class="form-row mb-8">
             <div class="field field-lg">
@@ -215,8 +282,13 @@ Select a log file on the left to view its contents.</div>
               <input type="checkbox" id="j-yaml"> Export YAML
             </label>
           </div>
-          <button type="submit" class="btn btn-primary">Start Job</button>
+          <button type="submit" class="btn btn-primary">Start Scrape Job</button>
         </form>
+        <div class="flex gap-8 mt-12">
+          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/enrich', 'Enrich All')">Re-enrich All</button>
+          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/translate', 'Translate')">Translate Missing</button>
+          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/extract-pdf', 'Extract PDF')">Re-extract PDF</button>
+        </div>
         <div id="scrape-result"></div>
       </div>
       <div class="card">
@@ -228,8 +300,53 @@ Select a log file on the left to view its contents.</div>
       </div>
     </div>
 
+    <!-- ── LOGS ───────────────────────────────────── -->
+    <div id="tab-logs" class="tab">
+      <div class="two-col">
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Log Files</div>
+              <button class="btn btn-ghost btn-sm" onclick="loadLogs()">Refresh</button>
+            </div>
+            <div id="log-files"></div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title" id="log-viewer-name">Select a file</div>
+              <button class="btn btn-ghost btn-sm" id="log-reload-btn"
+                style="display:none" onclick="reloadLog()">Reload</button>
+            </div>
+            <div id="log-viewer" class="log-viewer" style="min-height:200px">
+Select a log file on the left to view its contents.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /app-content -->
 </div><!-- /app -->
+
+<!-- ═══════════════════════════════════════════════════════
+     SETUP WIZARD
+═══════════════════════════════════════════════════════ -->
+<div id="wizard-screen" style="display:none">
+  <div class="wizard-card">
+    <div class="wizard-header">
+      <p class="brand">meMCP</p>
+      <span class="wizard-step-label" id="wizard-step-label"></span>
+      <button class="btn btn-ghost btn-sm wizard-skip-btn" onclick="_wizardSkip()">Skip Setup</button>
+    </div>
+    <div class="wizard-stepper" id="wizard-stepper"></div>
+    <div class="wizard-content" id="wizard-content"></div>
+    <div class="wizard-nav" id="wizard-nav">
+      <button class="btn btn-ghost" id="wiz-back" onclick="_wizardBack()">Back</button>
+      <button class="btn btn-primary" id="wiz-next" onclick="_wizardNext()">Next</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════════════════════════════════════════════
      MODAL
@@ -238,7 +355,7 @@ Select a log file on the left to view its contents.</div>
   <div class="modal">
     <div class="modal-header">
       <h3 id="modal-title"></h3>
-      <button class="modal-close" id="modal-close-btn">×</button>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-footer">

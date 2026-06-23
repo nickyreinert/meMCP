@@ -311,6 +311,55 @@ tbody tr.clickable { cursor: pointer; }
   flex-shrink: 0;
 }
 
+/* ── CAREER VIEW — TIMELINE ────────────────────────────── */
+.timeline { position: relative; padding-left: 20px; }
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--border);
+}
+.timeline-item {
+  position: relative;
+  margin-bottom: 20px;
+  padding-left: 20px;
+}
+.timeline-item:last-child { margin-bottom: 0; }
+.timeline-dot {
+  position: absolute;
+  left: -13px;
+  top: 5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.timeline-title { font-weight: 600; font-size: 14px; }
+.timeline-date { font-size: 12px; color: var(--text-muted); margin: 2px 0; }
+.timeline-desc { margin-top: 4px; opacity: 0.85; line-height: 1.5; }
+.timeline-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* ── CAREER VIEW — OEUVRE GRID ─────────────────────────── */
+.oeuvre-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.oeuvre-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.oeuvre-card a { color: var(--primary); text-decoration: none; }
+.oeuvre-card a:hover { text-decoration: underline; }
+.oeuvre-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+
 /* ── CODE / LOG VIEWER ─────────────────────────────────── */
 .log-viewer {
   background: #1e1e2e;
@@ -453,6 +502,210 @@ code {
 @media (max-width: 768px) {
   .two-col { grid-template-columns: 1fr; }
 }
+
+/* ── SETUP WIZARD ─────────────────────────────────────── */
+#wizard-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--nav-bg);
+  padding: 24px;
+}
+.wizard-card {
+  background: var(--surface);
+  border-radius: 8px;
+  width: 720px;
+  max-width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+.wizard-header {
+  padding: 24px 32px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.wizard-header .brand {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+}
+.wizard-header .wizard-step-label {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.wizard-skip-btn {
+  font-size: 12px !important;
+  color: var(--text-muted) !important;
+}
+.wizard-stepper {
+  display: flex;
+  align-items: center;
+  padding: 0 32px 20px;
+  gap: 0;
+}
+.wiz-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface);
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+.wiz-dot.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.wiz-dot.completed {
+  border-color: #36b37e;
+  background: #36b37e;
+  color: #fff;
+}
+.wiz-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 4px;
+}
+.wiz-line.completed { background: #36b37e; }
+.wizard-content {
+  padding: 0 32px;
+  min-height: 320px;
+  overflow-y: auto;
+  max-height: 55vh;
+}
+.wizard-content h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.wizard-content .wiz-subtitle {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+.wizard-nav {
+  padding: 16px 32px 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+}
+/* Radio card group (LLM backend picker) */
+.wiz-radio-group {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.wiz-radio-card {
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.wiz-radio-card:hover { border-color: #b3bac5; }
+.wiz-radio-card.selected {
+  border-color: var(--primary);
+  background: #f4f9ff;
+}
+.wiz-radio-card .wiz-rc-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.wiz-radio-card .wiz-rc-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* Conditional fields that show/hide */
+.wiz-conditional { margin-top: 16px; }
+.wiz-conditional.hidden { display: none; }
+/* Summary table on finish step */
+.wiz-summary-table { width: 100%; }
+.wiz-summary-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.wiz-summary-table td:first-child {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  width: 140px;
+}
+.wiz-summary-table tr:last-child td { border-bottom: none; }
+/* Language checkboxes grid */
+.wiz-lang-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.wiz-lang-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.wiz-lang-grid label:hover { background: var(--bg); }
+.wiz-lang-grid input[type=checkbox] { width: auto; }
+/* Toggle switch */
+.wiz-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.wiz-toggle:hover { border-color: #b3bac5; }
+.wiz-toggle.on { border-color: var(--primary); background: #f4f9ff; }
+.wiz-toggle-switch {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--border);
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.wiz-toggle.on .wiz-toggle-switch { background: var(--primary); }
+.wiz-toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.2s;
+}
+.wiz-toggle.on .wiz-toggle-switch::after { left: 22px; }
 
 /* ── TOKEN REVEALED BOX ────────────────────────────────── */
 .token-revealed {
