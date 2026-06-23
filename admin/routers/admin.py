@@ -1,7 +1,6 @@
-# Admin Router
-# Purpose: Define all admin-specific API endpoints with real business logic
-# Main functions: token management, DB browser, source management, scrape trigger
-# Dependent files: admin/dependencies/access_control.py, db/models.py
+# Admin Router — DB-First Architecture
+# All config (sources, prompts, chat, metrics, identity, i18n) stored in DB.
+# YAML files serve as initial seed only.
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from typing import Optional
@@ -17,14 +16,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pydantic import BaseModel
 
-import yaml
-
 from admin.dependencies.access_control import get_current_admin_user
-from db.models import get_db, DB_PATH, list_entities, list_all_tags, list_tag_metrics
+from db.models import (
+    get_db, DB_PATH, list_entities, list_all_tags, list_tag_metrics,
+    get_entity, update_entity, update_entity_tags, delete_entity,
+)
+from db.config_store import (
+    get_config, get_config_section, set_config, delete_config,
+    config_section_exists, get_all_sources, list_sources_flat,
+    get_prompt, get_prompt_content, list_prompts, upsert_prompt,
+    register_file, list_files,
+)
 
 logger = logging.getLogger(__name__)
 
-# Project root (one level up from admin/)
 ROOT = Path(__file__).resolve().parent.parent.parent
 
 # --- Pydantic models ---
@@ -65,6 +70,65 @@ class ScrapeRequest(BaseModel):
     export_yaml: bool = False
 
 
+class EntityUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    flavor: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    date: Optional[str] = None
+    is_current: Optional[bool] = None
+    visibility: Optional[str] = None
+    raw_data: Optional[dict] = None
+
+
+class EntityTags(BaseModel):
+    technologies: list[str] = []
+    skills: list[str] = []
+    tags: list[str] = []
+
+
+class PromptUpdate(BaseModel):
+    content: str
+    name: Optional[str] = None
+    category: Optional[str] = None
+
+
+class McpPromptCreate(BaseModel):
+    id: str
+    name: str
+    description: str
+    use_case: str
+    prompt_template: str
+
+
+class McpPromptUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    use_case: Optional[str] = None
+    prompt_template: Optional[str] = None
+
+
+class ChatConfig(BaseModel):
+    host: Optional[str] = None
+    model: Optional[str] = None
+    ollama_url: Optional[str] = None
+    rate_limit_per_minute: Optional[int] = None
+    max_history: Optional[int] = None
+    max_input_chars: Optional[int] = None
+    max_output_chars: Optional[int] = None
+    persona: Optional[dict] = None
+    starters: Optional[list] = None
+
+
+class I18nConfig(BaseModel):
+    target_languages: Optional[list[str]] = None
+    batch_sleep_seconds: Optional[float] = None
+
+
 # --- In-memory job tracking ---
 
 _running_jobs: dict[str, dict] = {}
@@ -77,26 +141,7 @@ def _now_utc() -> str:
 
 
 def _get_db_conn():
-    """Get a connection to profile.db."""
     return get_db(DB_PATH)
-
-
-def _content_config_path() -> Path:
-    return ROOT / "config.content.yaml"
-
-
-def _load_content_config() -> dict:
-    path = _content_config_path()
-    if not path.exists():
-        return {}
-    with open(path) as f:
-        return yaml.safe_load(f) or {}
-
-
-def _save_content_config(data: dict):
-    path = _content_config_path()
-    with open(path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 # --- ROUTER SETUP ---
@@ -116,11 +161,9 @@ async def admin_root():
 
 @router.get("/logs")
 async def get_logs(_user: dict = Depends(get_current_admin_user)):
-    """List available log files."""
     log_dir = ROOT / "logs"
     if not log_dir.exists():
         return {"logs": []}
-
     files = []
     for filename in sorted(os.listdir(log_dir)):
         filepath = log_dir / filename
@@ -136,28 +179,22 @@ async def get_logs(_user: dict = Depends(get_current_admin_user)):
 
 @router.get("/logs/{filename}")
 async def download_log(filename: str, _user: dict = Depends(get_current_admin_user)):
-    """Download specific log file content."""
     log_dir = ROOT / "logs"
     filepath = log_dir / filename
-
-    # Prevent path traversal
     if ".." in filename or "/" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
-
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Log file not found")
-
     content = filepath.read_text(errors="replace")
     return {"filename": filename, "content": content}
 
 
 # ============================================================================
-# TOKEN MANAGEMENT — wired to real db/profile.db
+# TOKEN MANAGEMENT
 # ============================================================================
 
 @router.get("/tokens")
 async def list_tokens(_user: dict = Depends(get_current_admin_user)):
-    """List all tokens with usage counts (mirrors `manage_tokens.py list`)."""
     conn = _get_db_conn()
     try:
         rows = conn.execute("""
@@ -179,14 +216,12 @@ async def list_tokens(_user: dict = Depends(get_current_admin_user)):
             expires = datetime.fromisoformat(row["expires_at"])
             if expires.tzinfo is None:
                 expires = expires.replace(tzinfo=timezone.utc)
-
             if not row["is_active"]:
                 token_status = "revoked"
             elif now > expires:
                 token_status = "expired"
             else:
                 token_status = "active"
-
             tokens.append({
                 "id": row["id"],
                 "owner_name": row["owner_name"],
@@ -202,7 +237,6 @@ async def list_tokens(_user: dict = Depends(get_current_admin_user)):
                     "max_output_chars": row["max_output_chars"],
                 },
             })
-
         return {"tokens": tokens, "count": len(tokens)}
     finally:
         conn.close()
@@ -210,15 +244,12 @@ async def list_tokens(_user: dict = Depends(get_current_admin_user)):
 
 @router.post("/tokens")
 async def create_token(body: TokenCreate, _user: dict = Depends(get_current_admin_user)):
-    """Create a new access token (mirrors `manage_tokens.py add`)."""
     if body.tier not in ("mcp", "chat"):
         raise HTTPException(status_code=400, detail="tier must be 'mcp' or 'chat'")
-
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires = (datetime.now(timezone.utc) + timedelta(days=body.days)).isoformat()
     created = _now_utc()
-
     conn = _get_db_conn()
     try:
         cur = conn.execute(
@@ -230,11 +261,10 @@ async def create_token(body: TokenCreate, _user: dict = Depends(get_current_admi
         token_id = cur.lastrowid
     finally:
         conn.close()
-
     logger.info(f"Created token #{token_id} for {body.owner} (tier={body.tier}, days={body.days})")
     return {
         "token_id": token_id,
-        "token": token,  # plaintext — shown once, never stored
+        "token": token,
         "owner": body.owner,
         "tier": body.tier,
         "expires_at": expires,
@@ -244,39 +274,29 @@ async def create_token(body: TokenCreate, _user: dict = Depends(get_current_admi
 
 @router.delete("/tokens/{token_id}")
 async def revoke_token(token_id: int, _user: dict = Depends(get_current_admin_user)):
-    """Soft-revoke a token (set is_active=0)."""
     conn = _get_db_conn()
     try:
-        row = conn.execute(
-            "SELECT id, owner_name FROM tokens WHERE id = ?", (token_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id, owner_name FROM tokens WHERE id = ?", (token_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail=f"Token {token_id} not found")
-
         conn.execute("UPDATE tokens SET is_active = 0 WHERE id = ?", (token_id,))
         conn.commit()
     finally:
         conn.close()
-
     logger.info(f"Revoked token #{token_id} ({row['owner_name']})")
     return {"message": f"Token {token_id} revoked", "owner": row["owner_name"]}
 
 
 @router.put("/tokens/{token_id}/budget")
 async def update_token_budget(
-    token_id: int,
-    body: TokenBudget,
+    token_id: int, body: TokenBudget,
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Update per-token budget overrides (mirrors `manage_tokens.py budget`)."""
     conn = _get_db_conn()
     try:
-        row = conn.execute(
-            "SELECT id, owner_name FROM tokens WHERE id = ?", (token_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id, owner_name FROM tokens WHERE id = ?", (token_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail=f"Token {token_id} not found")
-
         updates = []
         if body.max_tokens_per_session is not None:
             updates.append(("max_tokens_per_session", body.max_tokens_per_session))
@@ -286,90 +306,56 @@ async def update_token_budget(
             updates.append(("max_input_chars", body.max_input_chars))
         if body.max_output_chars is not None:
             updates.append(("max_output_chars", body.max_output_chars))
-
         if not updates:
-            # Return current budget
             brow = conn.execute(
                 "SELECT tier, max_tokens_per_session, max_calls_per_day, "
                 "max_input_chars, max_output_chars FROM tokens WHERE id = ?",
                 (token_id,),
             ).fetchone()
             return {
-                "token_id": token_id,
-                "owner": row["owner_name"],
-                "budget": {
-                    "tier": brow["tier"] or "mcp",
-                    "max_tokens_per_session": brow["max_tokens_per_session"],
-                    "max_calls_per_day": brow["max_calls_per_day"],
-                    "max_input_chars": brow["max_input_chars"],
-                    "max_output_chars": brow["max_output_chars"],
-                },
-                "message": "No changes — showing current budget",
+                "token_id": token_id, "owner": row["owner_name"],
+                "budget": dict(brow), "message": "No changes — showing current budget",
             }
-
         set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
         values = [v for _, v in updates] + [token_id]
         conn.execute(f"UPDATE tokens SET {set_clause} WHERE id = ?", values)
         conn.commit()
     finally:
         conn.close()
-
-    logger.info(f"Updated budget for token #{token_id}")
-    return {
-        "token_id": token_id,
-        "owner": row["owner_name"],
-        "updated": {col: val for col, val in updates},
-    }
+    return {"token_id": token_id, "owner": row["owner_name"], "updated": {col: val for col, val in updates}}
 
 
 @router.get("/tokens/{token_id}/stats")
-async def get_token_stats(
-    token_id: int,
-    _user: dict = Depends(get_current_admin_user),
-):
-    """Get usage stats for a specific token (mirrors `manage_tokens.py stats --id`)."""
+async def get_token_stats(token_id: int, _user: dict = Depends(get_current_admin_user)):
     conn = _get_db_conn()
     try:
         token = conn.execute(
             "SELECT id, owner_name, expires_at, is_active, tier, "
             "max_tokens_per_session, max_calls_per_day, max_input_chars, max_output_chars "
-            "FROM tokens WHERE id = ?",
-            (token_id,),
+            "FROM tokens WHERE id = ?", (token_id,),
         ).fetchone()
         if not token:
             raise HTTPException(status_code=404, detail=f"Token {token_id} not found")
-
         logs = conn.execute(
-            """
-            SELECT endpoint_called, timestamp, input_args,
-                   api_provider, input_text, tokens_used
-            FROM usage_logs
-            WHERE token_id = ?
-            ORDER BY timestamp DESC
-            LIMIT 50
-            """,
+            "SELECT endpoint_called, timestamp, input_args, api_provider, input_text, tokens_used "
+            "FROM usage_logs WHERE token_id = ? ORDER BY timestamp DESC LIMIT 50",
             (token_id,),
         ).fetchall()
     finally:
         conn.close()
 
-    # Endpoint frequency
     freq: dict[str, int] = {}
     for log in logs:
         ep = log["endpoint_called"]
         freq[ep] = freq.get(ep, 0) + 1
+    recent = [{
+        "endpoint": log["endpoint_called"],
+        "timestamp": log["timestamp"],
+        "api_provider": log["api_provider"],
+        "tokens_used": log["tokens_used"],
+        "input_preview": (log["input_text"] or log["input_args"] or "")[:100],
+    } for log in logs[:20]]
 
-    recent = []
-    for log in logs[:20]:
-        recent.append({
-            "endpoint": log["endpoint_called"],
-            "timestamp": log["timestamp"],
-            "api_provider": log["api_provider"],
-            "tokens_used": log["tokens_used"],
-            "input_preview": (log["input_text"] or log["input_args"] or "")[:100],
-        })
-
-    # Determine status
     expires = datetime.fromisoformat(token["expires_at"])
     if expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
@@ -382,10 +368,8 @@ async def get_token_stats(
         token_status = "active"
 
     return {
-        "token_id": token["id"],
-        "owner": token["owner_name"],
-        "status": token_status,
-        "tier": token["tier"] or "mcp",
+        "token_id": token["id"], "owner": token["owner_name"],
+        "status": token_status, "tier": token["tier"] or "mcp",
         "expires_at": token["expires_at"],
         "budget": {
             "max_tokens_per_session": token["max_tokens_per_session"],
@@ -400,35 +384,25 @@ async def get_token_stats(
 
 
 # ============================================================================
-# DATABASE BROWSER
+# DATABASE BROWSER + ENTITY EDITING
 # ============================================================================
 
 @router.get("/db")
 async def browse_database(
-    flavor: Optional[str] = Query(None, description="Filter by flavor: personal, stages, oeuvre, identity"),
-    category: Optional[str] = Query(None, description="Filter by category"),
-    source: Optional[str] = Query(None, description="Filter by source"),
-    search: Optional[str] = Query(None, description="Full-text search"),
-    tag: Optional[str] = Query(None, description="Filter by tag name"),
+    flavor: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Browse entities in the database with filters."""
     conn = _get_db_conn()
     try:
-        # Build tag list if provided
         tags = [tag] if tag else None
-        entities = list_entities(
-            conn,
-            flavor=flavor,
-            category=category,
-            source=source,
-            search=search,
-            tags=tags,
-            limit=limit,
-            offset=offset,
-        )
+        entities = list_entities(conn, flavor=flavor, category=category, source=source,
+                                 search=search, tags=tags, limit=limit, offset=offset)
         return {"entities": entities, "count": len(entities), "limit": limit, "offset": offset}
     finally:
         conn.close()
@@ -436,35 +410,24 @@ async def browse_database(
 
 @router.get("/db/stats")
 async def database_stats(_user: dict = Depends(get_current_admin_user)):
-    """Get database summary statistics."""
     conn = _get_db_conn()
     try:
-        # Entity counts by flavor
         flavor_counts = conn.execute(
             "SELECT flavor, COUNT(*) as count FROM entities GROUP BY flavor ORDER BY flavor"
         ).fetchall()
-
-        # Entity counts by category
         category_counts = conn.execute(
             "SELECT flavor, category, COUNT(*) as count FROM entities "
             "WHERE category IS NOT NULL GROUP BY flavor, category ORDER BY flavor, category"
         ).fetchall()
-
-        # Tag counts by type
         tag_counts = conn.execute(
             "SELECT tag_type, COUNT(DISTINCT tag) as unique_tags, COUNT(*) as total_assignments "
             "FROM tags GROUP BY tag_type ORDER BY tag_type"
         ).fetchall()
-
-        # Total entities
         total = conn.execute("SELECT COUNT(*) as count FROM entities").fetchone()["count"]
-
-        # Token count
         token_count = conn.execute("SELECT COUNT(*) as count FROM tokens").fetchone()["count"]
         active_tokens = conn.execute(
             "SELECT COUNT(*) as count FROM tokens WHERE is_active = 1"
         ).fetchone()["count"]
-
         return {
             "total_entities": total,
             "by_flavor": {r["flavor"]: r["count"] for r in flavor_counts},
@@ -484,11 +447,10 @@ async def database_stats(_user: dict = Depends(get_current_admin_user)):
 
 
 @router.get("/db/tags")
-async def list_tags(
-    tag_type: Optional[str] = Query(None, description="Filter: technology, skill, generic"),
+async def list_tags_endpoint(
+    tag_type: Optional[str] = Query(None),
     _user: dict = Depends(get_current_admin_user),
 ):
-    """List all tags, optionally filtered by type."""
     conn = _get_db_conn()
     try:
         tags = list_all_tags(conn, tag_type=tag_type)
@@ -499,12 +461,11 @@ async def list_tags(
 
 @router.get("/db/metrics")
 async def get_metrics(
-    tag_type: Optional[str] = Query(None, description="Filter: technology, skill, generic"),
-    order_by: str = Query("relevance_score", description="Sort field"),
+    tag_type: Optional[str] = Query(None),
+    order_by: str = Query("relevance_score"),
     limit: int = Query(100, ge=1, le=500),
     _user: dict = Depends(get_current_admin_user),
 ):
-    """List tag metrics."""
     conn = _get_db_conn()
     try:
         metrics = list_tag_metrics(conn, tag_type=tag_type, order_by=order_by, limit=limit)
@@ -513,54 +474,83 @@ async def get_metrics(
         conn.close()
 
 
+@router.get("/db/{entity_id}")
+async def get_entity_detail(entity_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Get full entity detail with tags."""
+    conn = _get_db_conn()
+    try:
+        entity = get_entity(conn, entity_id)
+        if not entity:
+            raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+        return {"entity": entity}
+    finally:
+        conn.close()
+
+
+@router.put("/db/{entity_id}")
+async def update_entity_endpoint(
+    entity_id: str, body: EntityUpdate,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Update entity fields."""
+    conn = _get_db_conn()
+    try:
+        fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not fields:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        ok = update_entity(conn, entity_id, fields)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+        conn.commit()
+        return {"message": f"Entity {entity_id} updated", "fields": list(fields.keys())}
+    finally:
+        conn.close()
+
+
+@router.put("/db/{entity_id}/tags")
+async def update_entity_tags_endpoint(
+    entity_id: str, body: EntityTags,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Replace all tags for an entity."""
+    conn = _get_db_conn()
+    try:
+        ok = update_entity_tags(conn, entity_id, body.model_dump())
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+        conn.commit()
+        return {"message": f"Tags updated for entity {entity_id}"}
+    finally:
+        conn.close()
+
+
+@router.delete("/db/{entity_id}")
+async def delete_entity_endpoint(entity_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Delete an entity and its tags/translations."""
+    conn = _get_db_conn()
+    try:
+        ok = delete_entity(conn, entity_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Entity {entity_id} not found")
+        conn.commit()
+        return {"message": f"Entity {entity_id} deleted"}
+    finally:
+        conn.close()
+
+
 # ============================================================================
-# SOURCE MANAGEMENT — reads/writes config.content.yaml
+# SOURCE MANAGEMENT — DB-first (reads/writes config table)
 # ============================================================================
 
 @router.get("/sources")
-async def list_sources(_user: dict = Depends(get_current_admin_user)):
-    """List all configured sources from config.content.yaml."""
-    config = _load_content_config()
-
-    sources = []
-
-    # Identity source
-    identity = config.get("identity", {})
-    if identity:
-        sources.append({
-            "id": "identity",
-            "section": "identity",
-            "source": identity.get("source"),
-        })
-
-    # Stages source
-    stages = config.get("stages", {})
-    if stages:
-        sources.append({
-            "id": "stages",
-            "section": "stages",
-            "connector": stages.get("connector"),
-            "enabled": stages.get("enabled", True),
-            "url": stages.get("url"),
-            "llm_processing": stages.get("llm-processing", False),
-        })
-
-    # Oeuvre sources
-    oeuvre = config.get("oeuvre", {})
-    for name, cfg in oeuvre.items():
-        sources.append({
-            "id": f"oeuvre.{name}",
-            "section": "oeuvre",
-            "name": name,
-            "connector": cfg.get("connector"),
-            "enabled": cfg.get("enabled", True),
-            "url": cfg.get("url"),
-            "sub_type_override": cfg.get("sub_type_override"),
-            "llm_processing": cfg.get("llm-processing", False),
-            "limit": cfg.get("limit", 0),
-        })
-
-    return {"sources": sources, "count": len(sources)}
+async def list_sources_endpoint(_user: dict = Depends(get_current_admin_user)):
+    """List all configured sources from DB."""
+    conn = _get_db_conn()
+    try:
+        sources = list_sources_flat(conn)
+        return {"sources": sources, "count": len(sources)}
+    finally:
+        conn.close()
 
 
 @router.post("/sources")
@@ -570,14 +560,17 @@ async def add_source(
     body: SourceConfig = ...,
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Add a new source to config.content.yaml."""
-    config = _load_content_config()
-
-    if section == "oeuvre":
-        if "oeuvre" not in config:
-            config["oeuvre"] = {}
-        if name in config["oeuvre"]:
-            raise HTTPException(status_code=409, detail=f"Source '{name}' already exists in oeuvre")
+    """Add a new source to the DB config table."""
+    conn = _get_db_conn()
+    try:
+        if section == "oeuvre":
+            key = f"oeuvre.{name}"
+            if get_config(conn, "sources", key) is not None:
+                raise HTTPException(status_code=409, detail=f"Source '{name}' already exists")
+        elif section == "stages":
+            key = "stages"
+        else:
+            raise HTTPException(status_code=400, detail="Section must be 'oeuvre' or 'stages'")
 
         source_data = {"enabled": body.enabled}
         if body.connector:
@@ -599,31 +592,37 @@ async def add_source(
         if body.connector_setup:
             source_data["connector-setup"] = body.connector_setup
 
-        config["oeuvre"][name] = source_data
-    else:
-        raise HTTPException(status_code=400, detail="Only 'oeuvre' section supports adding sources")
+        set_config(conn, "sources", key, source_data, updated_by="admin")
+        conn.commit()
+    finally:
+        conn.close()
 
-    _save_content_config(config)
-    logger.info(f"Added source '{name}' to config.content.yaml")
-    return {"message": f"Source '{name}' added", "source_id": f"oeuvre.{name}"}
+    logger.info(f"Added source '{key}' to DB")
+    return {"message": f"Source '{name}' added", "source_id": key}
 
 
-@router.put("/sources/{source_id}")
+@router.put("/sources/{source_id:path}")
 async def update_source(
-    source_id: str,
-    body: SourceConfig,
+    source_id: str, body: SourceConfig,
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Update an existing source in config.content.yaml."""
-    config = _load_content_config()
+    """Update an existing source in the DB config table."""
+    conn = _get_db_conn()
+    try:
+        # Determine the DB key
+        if source_id.startswith("oeuvre."):
+            key = source_id
+        elif source_id == "stages":
+            key = "stages"
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown source_id: {source_id}")
 
-    if source_id.startswith("oeuvre."):
-        name = source_id[len("oeuvre."):]
-        oeuvre = config.get("oeuvre", {})
-        if name not in oeuvre:
-            raise HTTPException(status_code=404, detail=f"Source '{name}' not found in oeuvre")
+        existing = get_config(conn, "sources", key)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        if not isinstance(existing, dict):
+            existing = {}
 
-        existing = oeuvre[name]
         if body.connector is not None:
             existing["connector"] = body.connector
         if body.url is not None:
@@ -644,61 +643,282 @@ async def update_source(
         if body.connector_setup is not None:
             existing["connector-setup"] = body.connector_setup
 
-        config["oeuvre"][name] = existing
-    elif source_id == "stages":
-        stages = config.get("stages", {})
-        if body.connector is not None:
-            stages["connector"] = body.connector
-        if body.url is not None:
-            stages["url"] = body.url
-        stages["enabled"] = body.enabled
-        stages["llm-processing"] = body.llm_processing
-        config["stages"] = stages
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown source_id format: {source_id}")
+        set_config(conn, "sources", key, existing, updated_by="admin")
+        conn.commit()
+    finally:
+        conn.close()
 
-    _save_content_config(config)
-    logger.info(f"Updated source '{source_id}' in config.content.yaml")
+    logger.info(f"Updated source '{source_id}' in DB")
     return {"message": f"Source '{source_id}' updated"}
 
 
-@router.delete("/sources/{source_id}")
-async def remove_source(
-    source_id: str,
-    _user: dict = Depends(get_current_admin_user),
-):
-    """Remove a source from config.content.yaml."""
-    config = _load_content_config()
+@router.delete("/sources/{source_id:path}")
+async def remove_source(source_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Remove a source from the DB config table."""
+    conn = _get_db_conn()
+    try:
+        if source_id.startswith("oeuvre."):
+            key = source_id
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Only oeuvre sources can be deleted. Use PUT to disable stages/identity.",
+            )
+        ok = delete_config(conn, "sources", key)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        conn.commit()
+    finally:
+        conn.close()
 
-    if source_id.startswith("oeuvre."):
-        name = source_id[len("oeuvre."):]
-        oeuvre = config.get("oeuvre", {})
-        if name not in oeuvre:
-            raise HTTPException(status_code=404, detail=f"Source '{name}' not found in oeuvre")
-        del config["oeuvre"][name]
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Only oeuvre sources can be deleted. Use PUT to disable stages/identity.",
-        )
-
-    _save_content_config(config)
-    logger.info(f"Removed source '{source_id}' from config.content.yaml")
+    logger.info(f"Removed source '{source_id}' from DB")
     return {"message": f"Source '{source_id}' removed"}
 
 
 # ============================================================================
-# SCRAPING & ENRICHMENT — launches ingest.py as subprocess
+# LLM PROMPTS MANAGEMENT
 # ============================================================================
 
-@router.post("/scrape")
-async def trigger_scraping(
-    body: ScrapeRequest,
+@router.get("/prompts")
+async def list_prompts_endpoint(
+    category: Optional[str] = Query(None),
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Trigger a scraping/enrichment job by launching ingest.py as a subprocess."""
-    cmd = [sys.executable, str(ROOT / "ingest.py")]
+    """List all LLM prompts."""
+    conn = _get_db_conn()
+    try:
+        prompts = list_prompts(conn, category=category)
+        return {"prompts": prompts, "count": len(prompts)}
+    finally:
+        conn.close()
 
+
+@router.get("/prompts/{prompt_id}")
+async def get_prompt_endpoint(prompt_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Get a single prompt by ID."""
+    conn = _get_db_conn()
+    try:
+        prompt = get_prompt(conn, prompt_id)
+        if not prompt:
+            raise HTTPException(status_code=404, detail=f"Prompt '{prompt_id}' not found")
+        return {"prompt": prompt}
+    finally:
+        conn.close()
+
+
+@router.put("/prompts/{prompt_id}")
+async def update_prompt_endpoint(
+    prompt_id: str, body: PromptUpdate,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Update a prompt's content (auto-increments version)."""
+    conn = _get_db_conn()
+    try:
+        existing = get_prompt(conn, prompt_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Prompt '{prompt_id}' not found")
+        name = body.name or existing["name"]
+        category = body.category or existing["category"]
+        upsert_prompt(conn, prompt_id, category, name, body.content, updated_by="admin")
+        conn.commit()
+        return {"message": f"Prompt '{prompt_id}' updated", "version": existing["version"] + 1}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# MCP PROMPT TEMPLATES (user-facing, for LLM agents)
+# ============================================================================
+
+@router.get("/mcp-prompts")
+async def list_mcp_prompts(_user: dict = Depends(get_current_admin_user)):
+    """List all MCP prompt templates."""
+    conn = _get_db_conn()
+    try:
+        section = get_config_section(conn, "mcp_prompts")
+        prompts = [{"id": k, **v} for k, v in section.items()]
+        return {"prompts": prompts, "count": len(prompts)}
+    finally:
+        conn.close()
+
+
+@router.get("/mcp-prompts/{prompt_id}")
+async def get_mcp_prompt(prompt_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Get a single MCP prompt template."""
+    conn = _get_db_conn()
+    try:
+        val = get_config(conn, "mcp_prompts", prompt_id)
+        if val is None:
+            raise HTTPException(status_code=404, detail=f"MCP prompt '{prompt_id}' not found")
+        return {"prompt": {"id": prompt_id, **val}}
+    finally:
+        conn.close()
+
+
+@router.post("/mcp-prompts")
+async def create_mcp_prompt(body: McpPromptCreate, _user: dict = Depends(get_current_admin_user)):
+    """Create a new MCP prompt template."""
+    conn = _get_db_conn()
+    try:
+        existing = get_config(conn, "mcp_prompts", body.id)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail=f"MCP prompt '{body.id}' already exists")
+        val = {
+            "name": body.name,
+            "description": body.description,
+            "use_case": body.use_case,
+            "prompt_template": body.prompt_template,
+        }
+        set_config(conn, "mcp_prompts", body.id, val, updated_by="admin")
+        conn.commit()
+        return {"message": f"MCP prompt '{body.id}' created"}
+    finally:
+        conn.close()
+
+
+@router.put("/mcp-prompts/{prompt_id}")
+async def update_mcp_prompt(
+    prompt_id: str, body: McpPromptUpdate,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Update an MCP prompt template."""
+    conn = _get_db_conn()
+    try:
+        existing = get_config(conn, "mcp_prompts", prompt_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"MCP prompt '{prompt_id}' not found")
+        if body.name is not None:
+            existing["name"] = body.name
+        if body.description is not None:
+            existing["description"] = body.description
+        if body.use_case is not None:
+            existing["use_case"] = body.use_case
+        if body.prompt_template is not None:
+            existing["prompt_template"] = body.prompt_template
+        set_config(conn, "mcp_prompts", prompt_id, existing, updated_by="admin")
+        conn.commit()
+        return {"message": f"MCP prompt '{prompt_id}' updated"}
+    finally:
+        conn.close()
+
+
+@router.delete("/mcp-prompts/{prompt_id}")
+async def delete_mcp_prompt(prompt_id: str, _user: dict = Depends(get_current_admin_user)):
+    """Delete an MCP prompt template."""
+    conn = _get_db_conn()
+    try:
+        deleted = delete_config(conn, "mcp_prompts", prompt_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"MCP prompt '{prompt_id}' not found")
+        conn.commit()
+        return {"message": f"MCP prompt '{prompt_id}' deleted"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# CONFIG MANAGEMENT — chat, metrics, identity, i18n
+# ============================================================================
+
+@router.get("/config/{namespace}")
+async def get_config_section_endpoint(
+    namespace: str,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Get all config values for a namespace."""
+    allowed = {"chat", "metrics", "identity", "i18n", "server", "security", "session", "llm", "cache", "endpoints"}
+    if namespace not in allowed:
+        raise HTTPException(status_code=400, detail=f"Namespace must be one of: {allowed}")
+    conn = _get_db_conn()
+    try:
+        section = get_config_section(conn, namespace)
+        # Mask sensitive values for display
+        if namespace == "llm" and "groq_api_key" in section:
+            key = section["groq_api_key"]
+            if key:
+                section["groq_api_key"] = key[:8] + "****" if len(key) > 8 else "****"
+        return {"namespace": namespace, "config": section}
+    finally:
+        conn.close()
+
+
+@router.put("/config/{namespace}")
+async def update_config_section_endpoint(
+    namespace: str, body: dict,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Update config values for a namespace. Accepts a flat dict of key: value pairs."""
+    allowed = {"chat", "metrics", "identity", "i18n", "server", "security", "session", "llm", "cache", "endpoints"}
+    if namespace not in allowed:
+        raise HTTPException(status_code=400, detail=f"Namespace must be one of: {allowed}")
+    conn = _get_db_conn()
+    try:
+        for key, value in body.items():
+            set_config(conn, namespace, key, value, updated_by="admin")
+        conn.commit()
+        return {"message": f"Config '{namespace}' updated", "keys": list(body.keys())}
+    finally:
+        conn.close()
+
+
+@router.put("/config/chat")
+async def update_chat_config(body: ChatConfig, _user: dict = Depends(get_current_admin_user)):
+    """Update chat proxy configuration."""
+    conn = _get_db_conn()
+    try:
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        for key, value in updates.items():
+            set_config(conn, "chat", key, value, updated_by="admin")
+        conn.commit()
+        return {"message": "Chat config updated", "keys": list(updates.keys())}
+    finally:
+        conn.close()
+
+
+@router.put("/config/i18n")
+async def update_i18n_config(body: I18nConfig, _user: dict = Depends(get_current_admin_user)):
+    """Update i18n configuration."""
+    conn = _get_db_conn()
+    try:
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        for key, value in updates.items():
+            set_config(conn, "i18n", key, value, updated_by="admin")
+        conn.commit()
+        return {"message": "i18n config updated", "keys": list(updates.keys())}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# ADMIN ACTIONS — enrichment, translation, PDF extraction
+# ============================================================================
+
+def _launch_job(cmd: list[str], label: str) -> dict:
+    """Launch a subprocess job and return job info."""
+    job_id = str(uuid.uuid4())[:8]
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(ROOT),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        _running_jobs[job_id] = {
+            "process": proc, "command": " ".join(cmd),
+            "started_at": _now_utc(), "status": "running", "output": "",
+        }
+    except Exception as e:
+        logger.error(f"Failed to start {label} job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start job: {e}")
+    logger.info(f"Started {label} job {job_id}: {' '.join(cmd)}")
+    return {
+        "job_id": job_id, "command": " ".join(cmd),
+        "status": "running", "started_at": _running_jobs[job_id]["started_at"],
+    }
+
+
+@router.post("/scrape")
+async def trigger_scraping(body: ScrapeRequest, _user: dict = Depends(get_current_admin_user)):
+    """Trigger a scraping/enrichment job."""
+    cmd = [sys.executable, str(ROOT / "ingest.py")]
     if body.source:
         cmd.extend(["--source", body.source])
     if body.force:
@@ -709,57 +929,68 @@ async def trigger_scraping(
         cmd.append("--llm-only")
     if body.export_yaml:
         cmd.append("--export-yaml")
+    return _launch_job(cmd, "scrape")
 
-    job_id = str(uuid.uuid4())[:8]
 
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        _running_jobs[job_id] = {
-            "process": proc,
-            "command": " ".join(cmd),
-            "started_at": _now_utc(),
-            "status": "running",
-            "output": "",
-        }
-    except Exception as e:
-        logger.error(f"Failed to start scraping job: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start job: {e}")
+@router.post("/enrich")
+async def trigger_enrichment(
+    source: Optional[str] = Query(None),
+    entity_id: Optional[str] = Query(None),
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Trigger LLM enrichment (re-enrich entities)."""
+    cmd = [sys.executable, str(ROOT / "ingest.py"), "--llm-only"]
+    if source:
+        cmd.extend(["--source", source])
+    if entity_id:
+        cmd.extend(["--item", entity_id])
+    return _launch_job(cmd, "enrich")
 
-    logger.info(f"Started scraping job {job_id}: {' '.join(cmd)}")
-    return {
-        "job_id": job_id,
-        "command": " ".join(cmd),
-        "status": "running",
-        "started_at": _running_jobs[job_id]["started_at"],
-    }
+
+@router.post("/translate")
+async def trigger_translation(
+    lang: Optional[str] = Query(None),
+    force: bool = Query(False),
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Trigger translation job."""
+    cmd = [sys.executable, "-m", "llm.translator"]
+    if lang:
+        cmd.extend(["--lang", lang])
+    if force:
+        cmd.append("--force")
+    return _launch_job(cmd, "translate")
+
+
+@router.post("/extract-pdf")
+async def trigger_pdf_extraction(_user: dict = Depends(get_current_admin_user)):
+    """Trigger PDF extraction (re-parse LinkedIn PDF)."""
+    cmd = [sys.executable, str(ROOT / "ingest.py"), "--source", "stages", "--force"]
+    return _launch_job(cmd, "extract-pdf")
+
+
+@router.post("/recalculate-metrics")
+async def trigger_metrics_recalculation(_user: dict = Depends(get_current_admin_user)):
+    """Trigger metrics recalculation."""
+    cmd = [sys.executable, str(ROOT / "recalculate_metrics.py")]
+    return _launch_job(cmd, "recalculate-metrics")
 
 
 @router.get("/jobs")
 async def list_jobs(_user: dict = Depends(get_current_admin_user)):
-    """List all running/completed scraping jobs."""
     jobs = []
     for job_id, info in _running_jobs.items():
         proc = info["process"]
         if proc.poll() is not None and info["status"] == "running":
-            # Process finished — capture output
             info["status"] = "completed" if proc.returncode == 0 else "failed"
             info["return_code"] = proc.returncode
             try:
                 info["output"] = proc.stdout.read() if proc.stdout else ""
             except Exception:
                 pass
-
         jobs.append({
-            "job_id": job_id,
-            "command": info["command"],
-            "started_at": info["started_at"],
-            "status": info["status"],
+            "job_id": job_id, "command": info["command"],
+            "started_at": info["started_at"], "status": info["status"],
             "return_code": info.get("return_code"),
         })
     return {"jobs": jobs, "count": len(jobs)}
@@ -767,13 +998,10 @@ async def list_jobs(_user: dict = Depends(get_current_admin_user)):
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, _user: dict = Depends(get_current_admin_user)):
-    """Get status and output of a specific job."""
     if job_id not in _running_jobs:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
     info = _running_jobs[job_id]
     proc = info["process"]
-
     if proc.poll() is not None and info["status"] == "running":
         info["status"] = "completed" if proc.returncode == 0 else "failed"
         info["return_code"] = proc.returncode
@@ -781,31 +1009,31 @@ async def get_job(job_id: str, _user: dict = Depends(get_current_admin_user)):
             info["output"] = proc.stdout.read() if proc.stdout else ""
         except Exception:
             pass
-
     return {
-        "job_id": job_id,
-        "command": info["command"],
-        "started_at": info["started_at"],
-        "status": info["status"],
-        "return_code": info.get("return_code"),
-        "output": info.get("output", ""),
+        "job_id": job_id, "command": info["command"],
+        "started_at": info["started_at"], "status": info["status"],
+        "return_code": info.get("return_code"), "output": info.get("output", ""),
     }
 
 
 # ============================================================================
-# FILE UPLOAD
+# FILE UPLOAD — PDF + HTML, registers in uploaded_files table
 # ============================================================================
 
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
+    linked_source: Optional[str] = Query(None, description="Source key to link file to"),
     _user: dict = Depends(get_current_admin_user),
 ):
-    """Upload a PDF file to the data/ directory for processing."""
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    """Upload a PDF or HTML file to the data/ directory."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
 
-    # Sanitize filename
+    ext = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+    if ext not in ("pdf", "html", "htm"):
+        raise HTTPException(status_code=400, detail="Only PDF and HTML files are allowed")
+
     safe_name = os.path.basename(file.filename)
     data_dir = ROOT / "data"
     data_dir.mkdir(exist_ok=True)
@@ -814,10 +1042,87 @@ async def upload_file(
     content = await file.read()
     filepath.write_bytes(content)
 
-    logger.info(f"Uploaded file: {filepath} ({len(content)} bytes)")
+    file_type = "html" if ext in ("html", "htm") else ext
+
+    # Register in DB
+    conn = _get_db_conn()
+    try:
+        file_id = register_file(
+            conn, safe_name, f"data/{safe_name}", file_type,
+            size_bytes=len(content), linked_source=linked_source,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    logger.info(f"Uploaded file: {filepath} ({len(content)} bytes, id={file_id})")
     return {
         "message": "File uploaded successfully",
+        "file_id": file_id,
         "filename": safe_name,
         "size": len(content),
         "path": str(filepath),
     }
+
+
+@router.get("/files")
+async def list_uploaded_files(
+    linked_source: Optional[str] = Query(None),
+    _user: dict = Depends(get_current_admin_user),
+):
+    """List uploaded files."""
+    conn = _get_db_conn()
+    try:
+        files = list_files(conn, linked_source=linked_source)
+        return {"files": files, "count": len(files)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# CONFIG READINESS (foundation for setup wizard)
+# ============================================================================
+
+@router.get("/config/readiness")
+async def config_readiness(_user: dict = Depends(get_current_admin_user)):
+    """Check what config is present vs. missing. Foundation for setup wizard."""
+    from db.config_store import check_config_readiness
+    conn = _get_db_conn()
+    try:
+        return check_config_readiness(conn)
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# DB SEED STATUS
+# ============================================================================
+
+@router.get("/seed-status")
+async def get_seed_status(_user: dict = Depends(get_current_admin_user)):
+    """Check if config DB has been seeded."""
+    # Sections populated by seed_config_db.py (not user-specific data)
+    SEEDABLE = ("chat", "metrics", "server", "security", "session", "llm", "cache", "endpoints")
+    conn = _get_db_conn()
+    try:
+        sections = {ns: config_section_exists(conn, ns) for ns in SEEDABLE}
+        prompts_count = len(list_prompts(conn))
+        return {
+            "sections": sections,
+            "prompts_count": prompts_count,
+            "all_seeded": all(sections.values()) and prompts_count > 0,
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/seed")
+async def trigger_seed(
+    force: bool = Query(False),
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Seed DB with default config values."""
+    cmd = [sys.executable, str(ROOT / "scripts" / "seed_config_db.py")]
+    if force:
+        cmd.append("--force")
+    return _launch_job(cmd, "seed")

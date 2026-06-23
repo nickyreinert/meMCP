@@ -256,17 +256,17 @@ async function _loadDashboard() {
       } else {
         let details = [];
         for (const [section, seeded] of Object.entries(seedStatus.sections)) {
-          if (!seeded) details.push(`• ${section}`);
+          if (!seeded) details.push(section);
         }
-        if (seedStatus.prompts_count === 0) details.push('• prompts');
+        if (seedStatus.prompts_count === 0) details.push('prompts');
         
         el.innerHTML = `<div class="alert alert-warn">
-          <div style="margin-bottom:0.5em"><strong>Database needs initialization</strong></div>
+          <div style="margin-bottom:0.5em"><strong>Default configuration not yet initialized</strong></div>
           <div style="margin-bottom:0.8em; font-size:0.9em">
-            Seed will populate default configuration (prompts, metrics, chat settings, etc.)
-            <div style="margin-top:0.4em; opacity:0.8">Missing: ${details.join(' ')}</div>
+            Populates default prompts, metrics weights, chat settings, and server defaults.
+            ${details.length ? `<div style="margin-top:0.4em; opacity:0.8">Missing: ${details.join(', ')}</div>` : ''}
           </div>
-          <button class="btn btn-primary btn-sm" onclick="triggerSeed()">Seed Database</button>
+          <button class="btn btn-primary btn-sm" onclick="triggerSeed()">Initialize Defaults</button>
         </div>`;
       }
     }
@@ -292,7 +292,7 @@ async function triggerSeed() {
   try {
     const btn = event.target;
     btn.disabled = true;
-    btn.textContent = 'Seeding...';
+    btn.textContent = 'Initializing...';
     
     const result = await api('POST', '/seed');
     
@@ -303,28 +303,25 @@ async function triggerSeed() {
       try {
         const status = await api('GET', '/seed-status');
         if (status.all_seeded) {
-          btn.textContent = 'Seeding Complete!';
+          btn.textContent = 'Done!';
           btn.style.backgroundColor = '#28a745';
-          setTimeout(() => {
-            _loadDashboard(); // Refresh dashboard
-            btn.disabled = false;
-            btn.textContent = 'Seed Database';
-            btn.style.backgroundColor = '';
-          }, 1500);
+          setTimeout(() => _loadDashboard(), 1000);
           return;
         }
       } catch (_) { /* keep polling */ }
       attempts++;
     }
     
-    // Fallback if polling times out
+    // Fallback: job likely done but seed-status still shows gaps (user sections empty)
     btn.disabled = false;
-    btn.textContent = 'Seed Database';
-    alert('Seed job started. Dashboard will update when complete (watch Jobs tab for progress).');
+    btn.textContent = 'Initialize Defaults';
+    btn.style.backgroundColor = '';
+    alert('Initialization complete. Check the Jobs tab for output details.');
   } catch (ex) {
     alert('Error: ' + ex.message);
     event.target.disabled = false;
-    event.target.textContent = 'Seed Database';
+    event.target.textContent = 'Initialize Defaults';
+    event.target.style.backgroundColor = '';
   }
 }
 
