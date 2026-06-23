@@ -1,8 +1,6 @@
 data
 *.code-workspace
 .venv
-config.tech.yaml
-config.content.yaml
 db/*.db
 db/*.db-*
 !db/models.py
@@ -15,3 +13,4 @@ docs/ADMIN_BACKEND_CONCEPT.md
 .env
 connectors/.env
 connectors/proxy/data/
+.memcp_start_cache
