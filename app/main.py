@@ -56,7 +56,6 @@ import os
 import subprocess
 import sys
 import time
-import yaml
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -97,19 +96,35 @@ from app.dependencies.access_control import require_private_access, TokenInfo, b
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_config():
-    """Load and merge config.tech.yaml + config.content.yaml from project root."""
+    """Load config from DB (all settings live in SQLite)."""
     from config_loader import load_config as _load
     return _load(root=Path(__file__).parent.parent)
 
-def load_prompts():
-    """Load prompts.yaml from project root."""
-    prompts_path = Path(__file__).parent.parent / "prompts.yaml"
-    with open(prompts_path) as f:
-        data = yaml.safe_load(f)
-        return data.get("prompts", [])
+def load_mcp_prompts() -> list[dict]:
+    """Load MCP prompt templates from the database."""
+    try:
+        from db.config_store import get_config_section
+        from db.models import get_db
+        root = Path(__file__).parent.parent
+        cfg = load_config()
+        db_path_str = cfg.get("db_path", "db/profile.db")
+        db_path = Path(db_path_str)
+        if not db_path.is_absolute():
+            db_path = root / db_path
+        if not db_path.exists():
+            return []
+        conn = get_db(db_path)
+        try:
+            section = get_config_section(conn, "mcp_prompts")
+        finally:
+            conn.close()
+        # Convert {id: {name, description, ...}} to list format
+        return [{"id": k, **v} for k, v in section.items()]
+    except Exception:
+        return []
 
 CONFIG = load_config()
-PROMPTS = load_prompts()
+PROMPTS = load_mcp_prompts()
 APP_VERSION = "2.2.0"
 
 # Base URL for templates and documentation
@@ -201,7 +216,7 @@ async def endpoint_protection_middleware(request: Request, call_next):
     """
     Config-driven access control gate.
 
-    Reads ``protected_endpoints`` from config.tech.yaml and enforces the required
+    Reads ``protected_endpoints`` from DB config and enforces the required
     token tier for each listed path before any route handler or session-tracking
     middleware runs. Unlisted paths pass through without restriction.
     """
@@ -546,18 +561,31 @@ async def health():
 # MCP PROMPTS
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _get_mcp_prompts() -> list[dict]:
+    """Read MCP prompts live from DB (so admin edits take effect immediately)."""
+    try:
+        from db.config_store import get_config_section
+        conn = get_db(DB_PATH)
+        section = get_config_section(conn, "mcp_prompts")
+        conn.close()
+        return [{"id": k, **v} for k, v in section.items()]
+    except Exception:
+        return PROMPTS  # fallback to startup cache
+
+
 @app.get("/prompts", summary="List all MCP prompt templates")
 @limiter.limit("120/minute")
 async def list_prompts(request: Request):
     """
     Returns all available MCP prompt templates (summarized, without full template).
-    
+
     Prompts are reusable templates that guide LLMs and users on how to effectively
     interact with the meMCP server to accomplish specific tasks like building resumes,
     analyzing skills, or generating visualizations.
-    
+
     Use GET /prompts/{prompt_id} to retrieve the full template.
     """
+    prompts = _get_mcp_prompts()
     prompts_summary = [
         {
             "id": p["id"],
@@ -566,7 +594,7 @@ async def list_prompts(request: Request):
             "use_case": p["use_case"],
             "url": f"/prompts/{p['id']}"
         }
-        for p in PROMPTS
+        for p in prompts
     ]
     return ok({
         "prompts": prompts_summary,
@@ -595,7 +623,8 @@ async def get_prompt(
 
     This template can be directly used by LLMs or adapted by users for their needs.
     """
-    prompt = next((p for p in PROMPTS if p["id"] == prompt_id), None)
+    prompts = _get_mcp_prompts()
+    prompt = next((p for p in prompts if p["id"] == prompt_id), None)
     if not prompt:
         raise HTTPException(404, f"Prompt '{prompt_id}' not found")
 
@@ -987,7 +1016,7 @@ async def coverage_report(request: Request, conn=Depends(db)):
             "total_entities": total,
             "fetched_entities": 0,
             "coverage_is_relevant": False,
-            "message": "Session tracking is disabled in config.tech.yaml"
+            "message": "Session tracking is disabled in config"
         })
     
     client_ip = request.client.host if request.client else "unknown"

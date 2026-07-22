@@ -34,6 +34,102 @@ ask_yn() {
     [[ "$yn" =~ ^[Yy] ]]
 }
 
+# Toggle-menu: navigate with arrow keys, Space to toggle, Enter to confirm.
+# Compatible with bash 3.2 (macOS default) — no namerefs.
+#
+# Usage: config_menu PROXY_VAR TELEGRAM_VAR SLACK_VAR DISCORD_VAR
+# Each named var holds "true"/"false"; values are read via ${!var} and written
+# back with printf -v.
+config_menu() {
+    local var_proxy="$1" var_tg="$2" var_sl="$3" var_di="$4"
+
+    local labels=(
+        "Chat Proxy        — LLM-powered chat (:8001)"
+        "  Telegram bot    — requires TELEGRAM_TOKEN"
+        "  Slack bot       — requires SLACK_BOT_TOKEN"
+        "  Discord bot     — requires DISCORD_TOKEN"
+    )
+    local is_connector=(0 1 1 1)
+    local count=4
+    local cursor=0
+
+    # state array: 0=false 1=true — read initial values from caller vars
+    local s0=0 s1=0 s2=0 s3=0
+    [[ "${!var_proxy}" == "true" ]] && s0=1
+    [[ "${!var_tg}"    == "true" ]] && s1=1
+    [[ "${!var_sl}"    == "true" ]] && s2=1
+    [[ "${!var_di}"    == "true" ]] && s3=1
+
+    _cm_state() { eval "echo \$s$1"; }
+    _cm_set()   { eval "s$1=$2"; }
+
+    _cm_draw() {
+        local i proxy_on connector check
+        proxy_on=$(( s0 ))
+        for ((i = 0; i < count; i++)); do
+            connector=${is_connector[$i]}
+            local cur_state; cur_state=$(_cm_state "$i")
+            if [[ "$connector" == "1" && "$proxy_on" == "0" ]]; then
+                [[ "$i" == "$cursor" ]] \
+                    && printf "  \033[2m▶ [ ] %s\033[0m\n" "${labels[$i]}" \
+                    || printf "    \033[2m[ ] %s\033[0m\n" "${labels[$i]}"
+                continue
+            fi
+            check="  "
+            [[ "$cur_state" == "1" ]] && check="\033[0;32m✓\033[0m "
+            [[ "$i" == "$cursor" ]] \
+                && printf "  \033[1m▶ [%b] %s\033[0m\n" "$check" "${labels[$i]}" \
+                || printf "    [%b] %s\n" "$check" "${labels[$i]}"
+        done
+        printf "  \033[2m(↑↓ navigate · Space toggle · Enter confirm)\033[0m\n"
+    }
+
+    tput civis 2>/dev/null || true
+    printf "\n\033[1m  Services to start:\033[0m\n"
+    printf "\033[2m  MCP Server + Admin is always on.\033[0m\n\n"
+    _cm_draw
+    local draw_lines=$(( count + 1 ))
+
+    local key rest
+    while true; do
+        IFS= read -rsn1 key
+        if [[ "$key" == $'\x1b' ]]; then
+            IFS= read -rsn1 rest; key="$key$rest"
+            IFS= read -rsn1 rest; key="$key$rest"
+        fi
+
+        case "$key" in
+            $'\x1b[A')  (( cursor = (cursor - 1 + count) % count )) ;;
+            $'\x1b[B')  (( cursor = (cursor + 1) % count )) ;;
+            ' ')
+                local cur_state; cur_state=$(_cm_state "$cursor")
+                if [[ "${is_connector[$cursor]}" == "1" && "$s0" == "0" ]]; then
+                    :  # proxy off — connector rows locked
+                else
+                    local new_val=$(( 1 - cur_state ))
+                    _cm_set "$cursor" "$new_val"
+                    # proxy turned off — clear connectors
+                    if [[ "$cursor" == "0" && "$new_val" == "0" ]]; then
+                        s1=0; s2=0; s3=0
+                    fi
+                fi
+                ;;
+            ''|$'\n') break ;;
+        esac
+
+        tput cuu "$draw_lines" 2>/dev/null || printf '\033[%dA' "$draw_lines"
+        _cm_draw
+    done
+
+    tput cnorm 2>/dev/null || true
+    printf '\n'
+
+    [[ "$s0" == "1" ]] && printf -v "$var_proxy" "true" || printf -v "$var_proxy" "false"
+    [[ "$s1" == "1" ]] && printf -v "$var_tg"    "true" || printf -v "$var_tg"    "false"
+    [[ "$s2" == "1" ]] && printf -v "$var_sl"    "true" || printf -v "$var_sl"    "false"
+    [[ "$s3" == "1" ]] && printf -v "$var_di"    "true" || printf -v "$var_di"    "false"
+}
+
 port_is_in_use() {
     local port="$1"
 
@@ -98,39 +194,10 @@ if ! docker info &>/dev/null 2>&1; then
 fi
 
 # ── Load cached settings ────────────────────────────────────────────────────
-CACHED_PROXY=""
-CACHED_CONNECTORS=""
-USE_CACHE=false
-
-if [[ -f "$CACHE_FILE" ]]; then
-    source "$CACHE_FILE"
-    echo ""
-    echo -e "${DIM}Found last selection ($(stat -f %Sm -t '%Y-%m-%d %H:%M' "$CACHE_FILE" 2>/dev/null || echo 'unknown date'))${NC}"
-    if ask_yn "Use last selection?"; then
-        USE_CACHE=true
-    fi
-fi
-
-# ── Banner ───────────────────────────────────────────────────────────────────
-if [[ "$USE_CACHE" != "true" ]]; then
-    echo ""
-    echo -e "${BOLD}  meMCP — Docker Launcher${NC}"
-    echo -e "${DIM}  Select which services to start${NC}"
-    echo ""
-fi
-
-# ── Step 1: MCP Server + Admin ───────────────────────────────────────────────
-if [[ "$USE_CACHE" != "true" ]]; then
-    echo -e "${BOLD}1) MCP Server${NC} ${DIM}(API on :8000, Admin UI on :8081)${NC}"
-    echo -e "   This is the core service. It includes the MCP API server"
-    echo -e "   and the admin interface for managing your profile."
-    echo ""
-
-    if ! ask_yn "Start MCP Server + Admin?" "y"; then
-        info "Nothing to start. Exiting."
-        exit 0
-    fi
-fi
+CACHED_PROXY="false"
+CACHED_TELEGRAM="false"
+CACHED_SLACK="false"
+CACHED_DISCORD="false"
 
 START_PROXY=false
 CHAT_CONNECTORS=()
@@ -140,41 +207,22 @@ HOST_MCP_PORT=""
 HOST_ADMIN_PORT=""
 HOST_PROXY_PORT=""
 
-# ── Step 2: Chat Proxy ──────────────────────────────────────────────────────
-if [[ "$USE_CACHE" == "true" ]]; then
-    if [[ "$CACHED_PROXY" == "true" ]]; then
-        START_PROXY=true
-        if [[ -n "$CACHED_CONNECTORS" ]]; then
-            IFS=',' read -ra CHAT_CONNECTORS <<< "$CACHED_CONNECTORS"
-        fi
-    fi
-else
-    echo ""
-    echo -e "${BOLD}2) Chat Proxy${NC} ${DIM}(on :8001)${NC}"
-    echo -e "   Enables conversational access to your profile via LLM-powered chat."
-    echo -e "   Required if you want Telegram, Slack, or Discord bots."
-    echo ""
+echo ""
+echo -e "${BOLD}  meMCP — Docker Launcher${NC}"
 
-    if ask_yn "Start Chat Proxy?"; then
-        START_PROXY=true
-
-        # ── Step 3: Chat Connectors ──────────────────────────────────────────────
-        echo ""
-        echo -e "${BOLD}3) Chat Connectors${NC}"
-        echo -e "   Which bot adapters should connect to the proxy?"
-        echo ""
-
-        if ask_yn "  a) Telegram bot?"; then
-            CHAT_CONNECTORS+=("telegram")
-        fi
-        if ask_yn "  b) Slack bot?"; then
-            CHAT_CONNECTORS+=("slack")
-        fi
-        if ask_yn "  c) Discord bot?"; then
-            CHAT_CONNECTORS+=("discord")
-        fi
-    fi
+if [[ -f "$CACHE_FILE" ]]; then
+    source "$CACHE_FILE"
+    CACHE_DATE="$(stat -f %Sm -t '%Y-%m-%d %H:%M' "$CACHE_FILE" 2>/dev/null || echo 'unknown date')"
+    echo -e "${DIM}  Last saved: $CACHE_DATE${NC}"
 fi
+
+# ── Config menu (always shown, pre-filled from cache) ───────────────────────
+config_menu CACHED_PROXY CACHED_TELEGRAM CACHED_SLACK CACHED_DISCORD
+
+[[ "$CACHED_PROXY"    == "true" ]] && START_PROXY=true
+[[ "$CACHED_TELEGRAM" == "true" ]] && CHAT_CONNECTORS+=("telegram")
+[[ "$CACHED_SLACK"    == "true" ]] && CHAT_CONNECTORS+=("slack")
+[[ "$CACHED_DISCORD"  == "true" ]] && CHAT_CONNECTORS+=("discord")
 
 # ── Validate .env files ─────────────────────────────────────────────────────
 if [[ ! -f .env ]]; then
@@ -186,19 +234,17 @@ if [[ ! -f .env ]]; then
 fi
 
 # ── Check CONFIG_SECRET ──────────────────────────────────────────────────────
-if [[ "$USE_CACHE" != "true" ]]; then
-    if ! grep -q 'CONFIG_SECRET=[^[:space:]]*' .env 2>/dev/null || grep -q 'CONFIG_SECRET=$' .env; then
-        echo ""
-        echo -e "${BOLD}CONFIG_SECRET${NC} ${DIM}(for sensitive data encryption)${NC}"
-        if ask_yn "Generate a new CONFIG_SECRET?"; then
-            SECRET=$(openssl rand -hex 32)
-            if grep -q 'CONFIG_SECRET=' .env; then
-                sed -i '' "s/CONFIG_SECRET=.*/CONFIG_SECRET=$SECRET/" .env
-            else
-                echo "CONFIG_SECRET=$SECRET" >> .env
-            fi
-            info "CONFIG_SECRET generated and saved to .env"
+if ! grep -q 'CONFIG_SECRET=[^[:space:]]*' .env 2>/dev/null || grep -q 'CONFIG_SECRET=$' .env; then
+    echo ""
+    echo -e "${BOLD}CONFIG_SECRET${NC} ${DIM}(for sensitive data encryption)${NC}"
+    if ask_yn "Generate a new CONFIG_SECRET?"; then
+        SECRET=$(openssl rand -hex 32)
+        if grep -q 'CONFIG_SECRET=' .env; then
+            sed -i '' "s/CONFIG_SECRET=.*/CONFIG_SECRET=$SECRET/" .env
+        else
+            echo "CONFIG_SECRET=$SECRET" >> .env
         fi
+        info "CONFIG_SECRET generated and saved to .env"
     fi
 fi
 
@@ -279,15 +325,21 @@ done
 echo ""
 
 # ── Cache selection for next run ─────────────────────────────────────────────
-CONNECTORS_STR=""
-if [[ ${#CHAT_CONNECTORS[@]-0} -gt 0 ]]; then
-    CONNECTORS_STR=$(IFS=,; echo "${CHAT_CONNECTORS[*]}")
-fi
+_cache_telegram="false"; _cache_slack="false"; _cache_discord="false"
+for _c in "${CHAT_CONNECTORS[@]-}"; do
+    case "$_c" in
+        telegram) _cache_telegram="true" ;;
+        slack)    _cache_slack="true"    ;;
+        discord)  _cache_discord="true"  ;;
+    esac
+done
 
 cat > "$CACHE_FILE" << EOF
 # meMCP start.sh cache — autogenerated
 CACHED_PROXY="$START_PROXY"
-CACHED_CONNECTORS="$CONNECTORS_STR"
+CACHED_TELEGRAM="$_cache_telegram"
+CACHED_SLACK="$_cache_slack"
+CACHED_DISCORD="$_cache_discord"
 EOF
 
 info "Selection cached for next run (remove $CACHE_FILE to reset)"
@@ -316,7 +368,7 @@ echo ""
 echo -e "${GREEN}${BOLD}All selected services are starting.${NC}"
 echo ""
 echo -e "  MCP API:    http://localhost:$HOST_MCP_PORT"
-echo -e "  Admin UI:   http://localhost:$HOST_ADMIN_PORT"
+echo -e "  Admin UI:   http://localhost:$HOST_ADMIN_PORT/ui"
 if $START_PROXY; then
     echo -e "  Chat Proxy: http://localhost:$HOST_PROXY_PORT"
 fi

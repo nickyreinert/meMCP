@@ -15,9 +15,9 @@ Main functions:
 
 Dependencies:
   - db/models.py: Database access and entity queries
-  - config.tech.yaml: Metric formula configuration
+  - DB config (metrics namespace): Metric formula configuration
 
-Metric formulas (all customizable via config.tech.yaml):
+Metric formulas (all customizable via admin UI → metrics config):
   - proficiency: Recency-weighted experience (0-100)
   - experience_years: Total time using skill/tech
   - entity_count: Number of entities with tag
@@ -37,13 +37,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
-
-
 # --- CONFIGURATION LOADING ---
 
 def load_metrics_config() -> dict:
-    """Load metrics configuration from config.tech.yaml."""
+    """Load metrics configuration from DB."""
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from config_loader import load_config

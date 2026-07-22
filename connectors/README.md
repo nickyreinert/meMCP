@@ -40,18 +40,15 @@ cp connectors/.env.example connectors/.env
 | `GROQ_API_KEY` | when `chat.host: groq` | Groq API key |
 | `PROXY_SECRET` | recommended | Auth header secret + token encryption key |
 
-### 2. `config.tech.yaml` — `chat:` section
+### 2. Chat config (DB — `chat` namespace)
 
-```yaml
-chat:
-  host: groq                       # groq | ollama
-  model: llama-3.3-70b-versatile
-  ollama_url: http://localhost:11434
-  memcp_url: http://localhost:8000
-  db_path: data/proxy.db
-  rate_limit_per_minute: 20
-  max_history: 10
-```
+Configure via Admin UI → Settings → Chat:
+- `host`: groq | ollama
+- `model`: LLM model name
+- `ollama_url`: Ollama base URL (default: http://localhost:11434)
+- `db_path`: SQLite path for proxy sessions (default: data/proxy.db)
+- `rate_limit_per_minute`: max messages per chat_id (default: 20)
+- `max_history`: conversation turns to keep (default: 10)
 
 ### 3. Start the proxy
 

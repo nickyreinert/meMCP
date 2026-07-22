@@ -25,8 +25,6 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
 log = logging.getLogger("mcp.translator")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,11 +41,8 @@ from llm.enricher import LLMEnricher
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_cfg(path: str = None) -> dict:
+def load_cfg() -> dict:
     from config_loader import load_config as _load
-    if path:
-        with open(path) as f:
-            return yaml.safe_load(f)
     return _load()
 
 
@@ -157,7 +152,7 @@ def translate_greeting(conn: sqlite3.Connection, enricher: LLMEnricher,
                        force: bool = False, dry_run: bool = False) -> bool:
     """
     Translate the static greeting/identity text.
-    Source text comes from config.content.yaml (identity section).
+    Source text comes from the identity config in the database.
     """
     if not force and get_greeting_translation(conn, target_lang):
         log.info(f"Greeting already translated to {target_lang}, skipping")
@@ -196,11 +191,13 @@ def translate_greeting(conn: sqlite3.Connection, enricher: LLMEnricher,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace, cfg: dict):
-    enricher = LLMEnricher(cfg.get("llm", {}))
+    # Pass DB connection to enricher so it can use DB-backed prompts
+    conn = get_db(DB_PATH)
+    enricher = LLMEnricher(cfg.get("llm", {}), db_conn=conn)
 
     if enricher.backend == "none":
         log.error("LLM backend is 'none' — translation requires GROQ or Ollama. "
-                  "Set llm.backend in config.tech.yaml or export GROQ_API_KEY.")
+                  "Set llm.backend via admin UI or export GROQ_API_KEY.")
         sys.exit(1)
 
     # Determine which languages to process
@@ -253,7 +250,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Personal MCP — Bulk Translator")
     parser.add_argument("--config",           default=None,
-                        help="Path to a single config YAML (default: auto-merge config.tech.yaml + config.content.yaml)")
+                        help="(Deprecated, ignored) Config comes from DB")
     parser.add_argument("--lang",             default=None,
                         help="Target language code, e.g. de (default: all configured)")
     parser.add_argument("--entity-id",        default=None,
@@ -266,5 +263,5 @@ if __name__ == "__main__":
                         help="Allow languages not in SUPPORTED_LANGS")
     args = parser.parse_args()
 
-    cfg = load_cfg(args.config)
+    cfg = load_cfg()
     run(args, cfg)

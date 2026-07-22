@@ -3,7 +3,7 @@ connectors/proxy/proxy.py — Chat Proxy
 =======================================
 
 A FastAPI service (port 8001) that bridges chat platforms to meMCP via
-LLM tool-calling (Groq or Ollama, configured via config.tech.yaml).
+LLM tool-calling (Groq or Ollama, configured via DB).
 
 Bot adapters (Telegram, Slack, Discord) are intentionally dumb — they just
 POST { chat_id, message } here and forward the reply back to the user.
@@ -32,8 +32,8 @@ Endpoints
   POST /chat   { "chat_id": str, "message": str } → { "reply": str, "state": str }
   GET  /health                                     → { "status": str, ... }
 
-Config (config.tech.yaml → chat: section)
-------------------------------------------
+Config (DB → chat: namespace)
+-----------------------------
   host:                 groq | ollama
   model:                model name
   ollama_url:           Ollama base URL    (default http://localhost:11434)
@@ -61,7 +61,6 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-import yaml
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
@@ -78,23 +77,21 @@ logger = logging.getLogger(__name__)
 
 # ── Config loader ─────────────────────────────────────────────────────────────
 
-def _load_tech_config() -> dict:
-    """Load config.tech.yaml, searching common locations."""
-    candidates = [
-        os.getenv("CONFIG_PATH"),
-        "/config/config.tech.yaml",
-        str(Path(__file__).parent.parent.parent / "config.tech.yaml"),
-    ]
-    for path in candidates:
-        if path and Path(path).exists():
-            with open(path) as fh:
-                return yaml.safe_load(fh) or {}
-    logger.warning("config.tech.yaml not found — using defaults")
-    return {}
+def _load_config() -> tuple[dict, dict]:
+    """Load unified config from DB via config_loader. Returns (full_cfg, chat_cfg)."""
+    try:
+        project_root = Path(__file__).parent.parent.parent
+        import sys
+        sys.path.insert(0, str(project_root))
+        from config_loader import load_config
+        full_cfg = load_config(root=project_root)
+    except Exception as exc:
+        logger.warning("Config load failed — using defaults: %s", exc)
+        full_cfg = {}
+    return full_cfg, full_cfg.get("chat", {})
 
 
-_TECH_CFG = _load_tech_config()
-_CFG      = _TECH_CFG.get("chat", {})
+_TECH_CFG, _CFG = _load_config()
 
 LLM_HOST    = _CFG.get("host", "groq")
 LLM_MODEL   = _CFG.get("model", "llama-3.3-70b-versatile")
@@ -121,6 +118,35 @@ STARTERS        = list(_CFG.get("starters", []))
 
 
 def _build_system_prompt() -> str:
+    """Build the chat system prompt, trying DB llm_prompts first."""
+    # Try DB-backed chat_system prompt template
+    try:
+        project_root = Path(__file__).parent.parent.parent
+        db_path_cfg = _TECH_CFG.get("db_path", "db/profile.db")
+        db_path = Path(db_path_cfg)
+        if not db_path.is_absolute():
+            db_path = project_root / db_path
+
+        if db_path.exists():
+            import sys
+            sys.path.insert(0, str(project_root))
+            from db.models import get_db
+            from llm.prompts import get_prompt
+            conn = get_db(db_path)
+            try:
+                tagline_suffix = f" ({PERSONA_TAGLINE})" if PERSONA_TAGLINE else ""
+                template = get_prompt("chat_system", conn)
+                return template.format(
+                    persona_name=PERSONA_NAME,
+                    tagline_suffix=tagline_suffix,
+                    tone=PERSONA_TONE,
+                )
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.debug("DB chat_system prompt lookup failed: %s", exc)
+
+    # Fallback: build from config values
     identity = f"You are a conversational assistant representing {PERSONA_NAME}"
     if PERSONA_TAGLINE:
         identity += f" ({PERSONA_TAGLINE})"

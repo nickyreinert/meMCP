@@ -196,6 +196,43 @@ CREATE TABLE IF NOT EXISTS derived_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_derived_value  ON derived_tokens(token_value);
 CREATE INDEX IF NOT EXISTS idx_derived_parent ON derived_tokens(parent_token_id);
+
+-- ── Configuration store (DB-first config, replaces YAML for managed sections) ─
+CREATE TABLE IF NOT EXISTS config (
+    namespace   TEXT NOT NULL,           -- 'sources', 'chat', 'metrics', 'i18n', 'identity'
+    key         TEXT NOT NULL,           -- e.g. 'oeuvre.github', 'persona', 'context_weights'
+    value       TEXT NOT NULL,           -- JSON-encoded value
+    updated_at  TEXT NOT NULL,
+    updated_by  TEXT DEFAULT 'system',   -- 'system' | 'admin' | 'yaml_seed'
+    PRIMARY KEY (namespace, key)
+);
+CREATE INDEX IF NOT EXISTS idx_config_ns ON config(namespace);
+
+-- ── LLM Prompts (editable system prompts for enrichment, translation, chat) ───
+CREATE TABLE IF NOT EXISTS llm_prompts (
+    prompt_id   TEXT PRIMARY KEY,        -- 'description_system', 'tag_system', etc.
+    category    TEXT NOT NULL,           -- 'enrichment' | 'translation' | 'chat' | 'extraction'
+    name        TEXT NOT NULL,           -- Human-readable label
+    content     TEXT NOT NULL,           -- The actual prompt text
+    is_active   INTEGER DEFAULT 1,       -- 1 = active, 0 = archived
+    version     INTEGER DEFAULT 1,       -- Incremented on each edit
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    updated_by  TEXT DEFAULT 'system'
+);
+CREATE INDEX IF NOT EXISTS idx_prompts_category ON llm_prompts(category);
+
+-- ── File upload registry ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS uploaded_files (
+    id          TEXT PRIMARY KEY,         -- uuid4
+    filename    TEXT NOT NULL,
+    file_path   TEXT NOT NULL,            -- relative path from project root
+    file_type   TEXT NOT NULL,            -- 'pdf' | 'html' | 'yaml'
+    size_bytes  INTEGER,
+    linked_source TEXT,                   -- source namespace key this file belongs to
+    uploaded_at TEXT NOT NULL,
+    uploaded_by TEXT DEFAULT 'admin'
+);
 """
 
 
@@ -240,6 +277,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         "ALTER TABLE usage_logs ADD COLUMN input_length INTEGER",
         "ALTER TABLE usage_logs ADD COLUMN input_text TEXT",
         "ALTER TABLE usage_logs ADD COLUMN tokens_used INTEGER",
+        # config — encrypted flag for sensitive values (API keys)
+        "ALTER TABLE config ADD COLUMN encrypted INTEGER DEFAULT 0",
         # Indexes on new columns — must run AFTER columns exist
         "CREATE INDEX IF NOT EXISTS idx_tokens_tier        ON tokens(tier)",
         "CREATE INDEX IF NOT EXISTS idx_usage_provider     ON usage_logs(api_provider)",
@@ -456,6 +495,81 @@ def upsert_entity(conn: sqlite3.Connection, data: dict) -> str:
             )
 
     return eid
+
+
+def update_entity(conn: sqlite3.Connection, entity_id: str, fields: dict) -> bool:
+    """
+    Update specific fields of an existing entity. Returns True if found and updated.
+    Only updates the fields provided in the dict (partial update).
+    """
+    row = conn.execute("SELECT id FROM entities WHERE id=?", (entity_id,)).fetchone()
+    if not row:
+        return False
+
+    allowed = {
+        "flavor", "category", "title", "description", "url", "canonical_url",
+        "source", "source_url", "start_date", "end_date", "date",
+        "is_current", "language", "visibility", "raw_data",
+        "llm_enriched", "llm_enriched_at", "llm_model",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return False
+
+    # Serialize raw_data if dict
+    if "raw_data" in updates and isinstance(updates["raw_data"], dict):
+        updates["raw_data"] = json.dumps(updates["raw_data"])
+    if "is_current" in updates:
+        updates["is_current"] = 1 if updates["is_current"] else 0
+
+    updates["updated_at"] = now_iso()
+    set_clause = ", ".join(f"{k}=:{k}" for k in updates)
+    updates["id"] = entity_id
+    conn.execute(f"UPDATE entities SET {set_clause} WHERE id=:id", updates)
+    return True
+
+
+def update_entity_tags(conn: sqlite3.Connection, entity_id: str, tags: dict) -> bool:
+    """
+    Replace all tags for an entity. `tags` should be:
+    {"technologies": [...], "skills": [...], "tags": [...]}
+    Returns True if entity exists.
+    """
+    row = conn.execute("SELECT id FROM entities WHERE id=?", (entity_id,)).fetchone()
+    if not row:
+        return False
+
+    conn.execute("DELETE FROM tags WHERE entity_id=?", (entity_id,))
+    for tag in tags.get("tags", []):
+        if tag and tag.strip():
+            conn.execute(
+                "INSERT OR IGNORE INTO tags(entity_id,tag,tag_type) VALUES(?,?,'generic')",
+                (entity_id, tag.strip()),
+            )
+    for tag in tags.get("technologies", []):
+        if tag and tag.strip():
+            conn.execute(
+                "INSERT OR IGNORE INTO tags(entity_id,tag,tag_type) VALUES(?,?,'technology')",
+                (entity_id, tag.strip()),
+            )
+    for tag in tags.get("skills", []):
+        if tag and tag.strip():
+            conn.execute(
+                "INSERT OR IGNORE INTO tags(entity_id,tag,tag_type) VALUES(?,?,'skill')",
+                (entity_id, tag.strip()),
+            )
+    return True
+
+
+def delete_entity(conn: sqlite3.Connection, entity_id: str) -> bool:
+    """Delete an entity and its tags/translations. Returns True if found."""
+    row = conn.execute("SELECT id FROM entities WHERE id=?", (entity_id,)).fetchone()
+    if not row:
+        return False
+    conn.execute("DELETE FROM tags WHERE entity_id=?", (entity_id,))
+    conn.execute("DELETE FROM entity_translations WHERE entity_id=?", (entity_id,))
+    conn.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+    return True
 
 
 # --- QUERY HELPERS ---

@@ -8,7 +8,7 @@
 #   # fill in GROQ_API_KEY and PROXY_SECRET
 #   docker compose up
 #
-# All connection/path settings come from config.yaml (chat: section).
+# All connection/path settings come from the DB (chat: namespace).
 # Secrets (GROQ_API_KEY, PROXY_SECRET) come from .env.
 # The two optional env var overrides (MEMCP_URL, PROXY_DB_PATH) are kept
 # here for Docker-specific paths that differ from local-dev config.
@@ -19,16 +19,15 @@ services:
     container_name: memcp-chat-proxy
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "${HOST_PROXY_PORT:-8001}:8001"
     env_file:
       - .env
     volumes:
       - proxy_data:/data
-      - ../config.tech.yaml:/config/config.tech.yaml:ro
+      - ../db:/app/db
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Linux: resolves to Docker host IP
     environment:
-      - CONFIG_PATH=/config/config.tech.yaml
       # Docker-specific overrides — paths differ from local-dev config.yaml values
       - MEMCP_URL=${MEMCP_URL:-http://host.docker.internal:8000}
       - PROXY_DB_PATH=/data/proxy.db

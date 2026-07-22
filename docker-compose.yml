@@ -4,19 +4,14 @@ services:
     container_name: mcp-server
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${HOST_MCP_PORT:-8000}:8000"
     volumes:
-      # Persist the database
       - ./db:/app/db
-      # Persist logs
       - ./logs:/app/logs
-      # Mount data directory
       - ./data:/app/data
-      # Mount config files
-      - ./config.tech.yaml:/app/config.tech.yaml:ro
-      - ./config.content.yaml:/app/config.content.yaml:ro
-      # Mount cache directory
       - ./.cache:/app/.cache
+    env_file:
+      - .env
     environment:
       - TZ=Europe/Berlin
     # Healthcheck to ensure the container is running correctly
@@ -34,15 +29,13 @@ services:
     container_name: mcp-admin
     restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "${HOST_ADMIN_PORT:-8081}:8081"
     volumes:
-      # Shared volumes with mcp-server (same DB, logs, data, config)
       - ./db:/app/db
       - ./logs:/app/logs
       - ./data:/app/data
-      - ./config.tech.yaml:/app/config.tech.yaml:ro
-      - ./config.content.yaml:/app/config.content.yaml
       - ./.cache:/app/.cache
+      - ./admin/static:/app/admin/static
     env_file:
       - .env
     environment:

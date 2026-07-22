@@ -1,0 +1,5 @@
+- add a "render" section with categories to the database tab to see career in a user eye friendly way
+- improve fonts in log tab because dark on dark is hard to read
+- remove .gitkeep in log tab
+- add a "wizzard" button to the dashboard tab, opening a modal that takes you through setup step by step, using radio and checkboxes and brief explanations of whats what
+- 

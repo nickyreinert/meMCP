@@ -1,5 +1,4 @@
 import argparse
-import yaml
 import logging
 import sys
 import warnings
@@ -16,12 +15,8 @@ warnings.filterwarnings('ignore', category=Warning, module='urllib3')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 log = logging.getLogger("mcp.ingest")
 
-def load_config(path: str = None):
+def load_config():
     from config_loader import load_config as _load
-    if path:
-        import yaml
-        with open(path) as f:
-            return yaml.safe_load(f)
     return _load()
 
 def main():
@@ -68,7 +63,9 @@ def main():
     enricher = None
     if not args.disable_llm:
         try:
-            enricher = LLMEnricher(llm_cfg)
+            from db.models import get_db as _get_db
+            db_conn = _get_db(db_path)
+            enricher = LLMEnricher(llm_cfg, db_conn=db_conn)
         except Exception:
             log.warning("LLM Enricher not initialized (missing dependencies or config). Proceeding without enrichment.")
 

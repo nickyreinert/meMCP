@@ -13,11 +13,13 @@ For your convenience look at the [meMCP Skill](skills/meMCP-SKILL.md) for how to
   - [Available Scrapers](#available-scrapers)
   - [Data Model](#data-model)
   - [Quick Start](#quick-start)
-    - [1. Install Dependencies](#1-install-dependencies)
-    - [2. Configure](#2-configure)
-    - [3. Ingest Data](#3-ingest-data)
-    - [4. Calculate Metrics (Optional)](#4-calculate-metrics-optional)
-    - [5. Run Server](#5-run-server)
+    - [Option 1: Run in a Container](#option-1-run-in-a-container)
+    - [Option 2: Run Python Directly](#option-2-run-python-directly)
+      - [1. Install Dependencies](#1-install-dependencies)
+      - [2. Configure](#2-configure)
+      - [3. Ingest Data](#3-ingest-data)
+      - [4. Calculate Metrics (Optional)](#4-calculate-metrics-optional)
+      - [5. Run Server](#5-run-server)
   - [Configuration](#configuration)
     - [Basic Settings](#basic-settings)
     - [Scraper Modules](#scraper-modules)
@@ -35,6 +37,7 @@ For your convenience look at the [meMCP Skill](skills/meMCP-SKILL.md) for how to
   - [Data Storage](#data-storage)
   - [Planned Features](#planned-features)
   - [License](#license)
+
 ## Features
 
 - Three-Tier access system (public, private, elevated) with token-based authentication
@@ -125,20 +128,41 @@ And finally `tags` tries to capute general attributes that are not covered by th
 
 ## Quick Start
 
-### 1. Install Dependencies
+- Option 1: Run in a container with **Docker** or **Podman**, no need to handle **Python** dependencies
+- Option 2: Run **Python** directly on your machine, more control and easier for development
+- in both cases, you have two main entry endpoints:
+  - `http://localhost:8000/` for the main MCP API
+  - `http://localhost:8081/ui` for the Admin Backend (configuration, data management, logs, etc.)
+
+### Option 1: Run in a Container
+
+- copy `.env.example` to `.env` and set your admin credentials and `CONFIG_SECRET`
+- build the image and then run it
+- all configuration is managed via the Admin UI at `http://localhost:8081/ui`
+ 
+```bash
+docker build -t memcp:latest .
+docker compose up -d
+```
+
+### Option 2: Run Python Directly
+#### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+#### 2. Configure
 
-Edit `config.tech.yaml` (infrastructure) and `config.content.yaml` (identity & sources) to set:
-- Your static identity information
-- LLM backend (Remote AI provider or locally, like **Ollama**)
-- Data sources (GitHub, Medium, blogs, etc.)
+All configuration lives in the database and is managed via the **Admin UI** at `http://localhost:8081/ui`.
+On first start, run `python scripts/seed_config_db.py` to populate defaults.
+Configurable sections include:
+- Data sources (GitHub, Medium, blogs, LinkedIn PDF, etc.)
+- Identity (name, tagline, links)
+- LLM prompts and MCP prompt templates
+- Chat persona and metrics weights
 
-### 3. Ingest Data
+#### 3. Ingest Data
 
 ```bash
 # Runs a full ingestion with all provided sources and utilizes LLM for content extraction
@@ -161,7 +185,7 @@ python ingest.py --source medium
 python ingest.py --dry-run
 ```
 
-### 4. Calculate Metrics (Optional)
+#### 4. Calculate Metrics (Optional)
 
 Calculate metrics for all skills, technologies, and tags:
 
@@ -183,7 +207,7 @@ python recalculate_metrics.py --verbose
 
 Metrics are automatically calculated during `ingest.py` runs, but you can recalculate them independently without re-fetching data.
 
-### 5. Run Server
+#### 5. Run Server
 
 ```bash
 # Start the FastAPI server with uvicorn
@@ -199,29 +223,21 @@ Server will be available at: **http://localhost:8000**
 
 ### Basic Settings
 
-Key settings in `config.tech.yaml` and `config.content.yaml`:
+All configuration is stored in the SQLite database (DB-first).
+On first start, `python scripts/seed_config_db.py` populates sensible defaults.
+Use the Admin UI at `http://localhost:8081/ui` to configure everything:
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 8000
-  admin_token: "change-me-please"
+- **Server**: host, port, base URL
+- **LLM**: backend (ollama/groq), model, API keys (encrypted in DB)
+- **Security**: CORS origins, trusted proxies
+- **Session**: tracking, timeout, coverage endpoints
+- **Data sources**: GitHub, Medium, blogs, LinkedIn PDF, etc.
+- **Identity**: name, tagline, links
+- **Prompts**: LLM enrichment and MCP prompt templates
+- **Chat**: persona, starters, rate limits
+- **Metrics**: weights and formulas
 
-llm:
-  backend: ollama  # or groq
-  model: mistral-small:24b-instruct-2501-q4_K_M
-
-oeuvre:
-  github:
-    enabled: true
-    connector: github_api
-    url: https://api.github.com/users/YOUR_USERNAME/repos
-
-  medium:
-    enabled: true
-    connector: medium_raw  # or rss
-    url: file://data/Medium.html  # for medium_raw, or https://medium.com/feed/@username for rss
-```
+Only `.env` is needed for secrets: `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `CONFIG_SECRET`.
 
 ### Scraper Modules
 
@@ -448,7 +464,7 @@ entities:
 ```bash
 pip install groq
 export GROQ_API_KEY=gsk_...
-# Update config.tech.yaml: llm.backend = groq
+# Set LLM backend via Admin UI → Settings → LLM: backend = groq
 ```
 
 **Option 2: Ollama**
@@ -457,7 +473,7 @@ export GROQ_API_KEY=gsk_...
 brew install ollama
 ollama serve
 ollama pull mistral-small:24b-instruct-2501-q4_K_M
-# Update config.tech.yaml: llm.backend = ollama
+# Set LLM backend via Admin UI → Settings → LLM: backend = ollama
 ```
 
 ### Running the Server

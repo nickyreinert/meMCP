@@ -45,10 +45,9 @@ def convert_linkedin_yaml_to_json(yaml_path: Path, json_path: Path):
     print(f"  {len(template['certifications'])} certifications")
     print(f"\nNext steps:")
     print(f"  1. Edit {json_path} manually as needed")
-    print(f"  2. Update config.content.yaml:")
-    print(f"       stages:")
-    print(f"         source_type: manual_json")
-    print(f"         source_path: {json_path}")
+    print(f"  2. Add a 'stages' source via the Admin UI with:")
+    print(f"       connector: manual_json")
+    print(f"       url: file://{json_path}")
     print(f"  3. Run: python ingest.py --disable-llm")
 
 

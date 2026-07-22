@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from admin.dependencies.access_control import get_current_admin_user
 from db.models import (
     get_db, DB_PATH, list_entities, list_all_tags, list_tag_metrics,
-    get_entity, update_entity, update_entity_tags, delete_entity,
+    get_entity, upsert_entity, update_entity, update_entity_tags, delete_entity,
 )
 from db.config_store import (
     get_config, get_config_section, set_config, delete_config,
@@ -86,6 +86,27 @@ class EntityUpdate(BaseModel):
 
 
 class EntityTags(BaseModel):
+    technologies: list[str] = []
+    skills: list[str] = []
+    tags: list[str] = []
+
+
+_VALID_FLAVORS = {"personal", "stages", "oeuvre", "identity"}
+
+
+class EntityCreate(BaseModel):
+    flavor: str
+    title: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    date: Optional[str] = None
+    is_current: Optional[bool] = None
+    visibility: Optional[str] = None
+    raw_data: Optional[dict] = None
     technologies: list[str] = []
     skills: list[str] = []
     tags: list[str] = []
@@ -404,6 +425,30 @@ async def browse_database(
         entities = list_entities(conn, flavor=flavor, category=category, source=source,
                                  search=search, tags=tags, limit=limit, offset=offset)
         return {"entities": entities, "count": len(entities), "limit": limit, "offset": offset}
+    finally:
+        conn.close()
+
+
+@router.post("/db")
+async def create_entity_endpoint(
+    body: EntityCreate,
+    _user: dict = Depends(get_current_admin_user),
+):
+    """Create a new entity (personal, stages, oeuvre, or identity)."""
+    if body.flavor not in _VALID_FLAVORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"flavor must be one of {sorted(_VALID_FLAVORS)}",
+        )
+    conn = _get_db_conn()
+    try:
+        data = body.model_dump()
+        data.setdefault("source", None)
+        if not data.get("source"):
+            data["source"] = "manual"
+        entity_id = upsert_entity(conn, data)
+        conn.commit()
+        return {"id": entity_id, "message": "Entity created"}
     finally:
         conn.close()
 

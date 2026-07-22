@@ -43,7 +43,7 @@
 | `/admin/db/tags` | GET | List all tags |
 | `/admin/db/metrics` | GET | Tag metrics (proficiency, relevance) |
 
-### Source Management (reads/writes `config.content.yaml`)
+### Source Management (database-backed)
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/admin/sources` | GET | List configured sources |
@@ -77,8 +77,7 @@ The admin container shares volumes with `mcp-server`:
 - `./db` — SQLite databases
 - `./logs` — Log files
 - `./data` — Uploaded files and scraped data
-- `./config.content.yaml` — Source configuration (read-write)
-- `./config.tech.yaml` — Technical configuration (read-only)
+- `./.env` — Secrets (admin credentials, CONFIG_SECRET for encryption)
 
 ## Usage Example
 

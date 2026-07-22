@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>meMCP Admin</title>
   <link rel="stylesheet" href="/ui/style.css">
+  <script src="https://unpkg.com/lucide@0.544.0/dist/umd/lucide.min.js"></script>
 </head>
 <body>
 
@@ -42,9 +43,7 @@
       <button class="nav-btn" data-tab="tokens">Tokens</button>
       <button class="nav-btn" data-tab="database">Database</button>
       <button class="nav-btn" data-tab="sources">Sources</button>
-      <button class="nav-btn" data-tab="prompts">Prompts</button>
       <button class="nav-btn" data-tab="settings">Settings</button>
-      <button class="nav-btn" data-tab="jobs">Jobs</button>
       <button class="nav-btn" data-tab="logs">Logs</button>
     </nav>
     <button class="nav-logout" id="logout-btn">Logout</button>
@@ -61,15 +60,21 @@
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-value" id="s-entities">—</div>
-          <div class="stat-label">Total Entities</div>
+          <div class="stat-label">Total Entities
+            <button class="help-btn" onclick="showSettingsHelp('entities')" title="What are entities?">?</button>
+          </div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="s-tok-active">—</div>
-          <div class="stat-label">Active Tokens</div>
+          <div class="stat-label">Active Tokens
+            <button class="help-btn" onclick="showSettingsHelp('tokens')" title="What are tokens?">?</button>
+          </div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="s-tok-total">—</div>
-          <div class="stat-label">Total Tokens</div>
+          <div class="stat-label">Total Tokens
+            <button class="help-btn" onclick="showSettingsHelp('tokens')" title="What are tokens?">?</button>
+          </div>
         </div>
         <div class="stat-card">
           <div class="stat-value" id="s-jobs-running">—</div>
@@ -92,24 +97,39 @@
     <!-- ── TOKENS ─────────────────────────────────── -->
     <div id="tab-tokens" class="tab">
       <div class="card">
-        <div class="card-title mb-12">Create New Token</div>
-        <form id="tok-form" class="form-row">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Create New Token</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Tokens gate access to your MCP API and chat endpoints.
+              Each token is scoped to a tier and expires after a set number of days.
+              <button class="help-btn" onclick="showSettingsHelp('tokens')" title="Learn more">?</button>
+            </p>
+          </div>
+        </div>
+        <form id="tok-form" class="form-row" style="margin-top:12px">
           <div class="field field-md">
-            <label>Owner</label>
-            <input type="text" id="tok-owner" placeholder="e.g. claude" required>
+            <label>Owner <span class="text-muted" style="font-weight:400;font-size:11px">— who is this token for?</span></label>
+            <input type="text" id="tok-owner" placeholder="e.g. claude, my-blog" required>
           </div>
           <div class="field field-sm">
             <label>Days valid</label>
             <input type="number" id="tok-days" value="30" min="1" max="3650">
           </div>
           <div class="field field-sm">
-            <label>Tier</label>
-            <select id="tok-tier">
-              <option value="mcp">mcp</option>
+            <label>Tier
+              <button class="help-btn" onclick="showSettingsHelp('token-tiers')" title="What are tiers?">?</button>
+            </label>
+            <div class="segmented" id="tok-tier-seg">
+              <button type="button" class="segmented-option active" data-value="mcp" onclick="_segmentedPick('tok-tier','mcp')">mcp</button>
+              <button type="button" class="segmented-option" data-value="chat" onclick="_segmentedPick('tok-tier','chat')">chat</button>
+            </div>
+            <select id="tok-tier" style="display:none">
+              <option value="mcp" selected>mcp</option>
               <option value="chat">chat</option>
             </select>
           </div>
-          <button type="submit" class="btn btn-primary">Create Token</button>
+          <button type="submit" class="btn btn-primary" style="align-self:flex-end">Create Token</button>
         </form>
         <div id="tok-result"></div>
       </div>
@@ -139,8 +159,15 @@
           <div class="form-row">
             <div class="field field-sm">
               <label>Flavor</label>
-              <select id="db-flavor">
-                <option value="">All</option>
+              <div class="segmented" id="db-flavor-seg">
+                <button type="button" class="segmented-option active" data-value="" onclick="_segmentedPick('db-flavor','')">All</button>
+                <button type="button" class="segmented-option" data-value="personal" onclick="_segmentedPick('db-flavor','personal')">personal</button>
+                <button type="button" class="segmented-option" data-value="stages" onclick="_segmentedPick('db-flavor','stages')">stages</button>
+                <button type="button" class="segmented-option" data-value="oeuvre" onclick="_segmentedPick('db-flavor','oeuvre')">oeuvre</button>
+                <button type="button" class="segmented-option" data-value="identity" onclick="_segmentedPick('db-flavor','identity')">identity</button>
+              </div>
+              <select id="db-flavor" style="display:none">
+                <option value="" selected>All</option>
                 <option value="personal">personal</option>
                 <option value="stages">stages</option>
                 <option value="oeuvre">oeuvre</option>
@@ -172,132 +199,312 @@
 
       <!-- CAREER VIEW -->
       <div id="db-view-career" style="display:none">
+        <div class="career-filter-bar">
+          <input type="text" id="career-search" placeholder="Filter by title, description, tag…"
+            oninput="filterCareerView()" style="flex:1; min-width:200px">
+          <div class="career-filter-toggles" id="career-flavor-toggles">
+            <button class="btn btn-ghost btn-sm career-toggle active" data-flavor="" onclick="setCareerFlavor(this, '')">All</button>
+            <button class="btn btn-ghost btn-sm career-toggle" data-flavor="stages" onclick="setCareerFlavor(this, 'stages')">Stages</button>
+            <button class="btn btn-ghost btn-sm career-toggle" data-flavor="oeuvre" onclick="setCareerFlavor(this, 'oeuvre')">Oeuvre</button>
+          </div>
+          <span id="career-count" class="text-muted text-sm" style="white-space:nowrap"></span>
+        </div>
         <div id="career-render"></div>
       </div>
     </div>
 
     <!-- ── SOURCES ────────────────────────────────── -->
     <div id="tab-sources" class="tab">
+
+      <!-- ── Add entities ─────────────────────────────── -->
+      <div class="card-grid">
+
+        <div class="card">
+          <div class="card-title">Add Personal Info</div>
+          <p class="text-muted text-sm mb-8" style="margin-top:4px">
+            Static info about you — name, bio, greetings, contact details. Shown to the assistant and API consumers.
+          </p>
+          <form onsubmit="addEntity(event, 'personal', 'ap')">
+            <div class="field mb-8"><label>Category</label>
+              <div class="segmented" id="ap-category-seg">
+                <button type="button" class="segmented-option active" data-value="basic" onclick="_segmentedPick('ap-category','basic')">basic</button>
+                <button type="button" class="segmented-option" data-value="contact" onclick="_segmentedPick('ap-category','contact')">contact</button>
+                <button type="button" class="segmented-option" data-value="greeting" onclick="_segmentedPick('ap-category','greeting')">greeting</button>
+              </div>
+              <select id="ap-category" style="display:none">
+                <option value="basic" selected>basic</option>
+                <option value="contact">contact</option>
+                <option value="greeting">greeting</option>
+              </select>
+            </div>
+            <div class="field mb-8"><label>Title</label>
+              <input type="text" id="ap-title" placeholder="e.g. Name, Email" required>
+            </div>
+            <div class="field mb-8"><label>Description</label>
+              <textarea id="ap-description" rows="3" style="width:100%" placeholder="The actual value or text"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Add</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Add Identity Fact</div>
+          <p class="text-muted text-sm mb-8" style="margin-top:4px">
+            One-off facts used to configure how the assistant persona behaves — distinct from your public Settings → Identity profile.
+          </p>
+          <form onsubmit="addEntity(event, 'identity', 'ai')">
+            <div class="field mb-8"><label>Category</label>
+              <div class="segmented" id="ai-category-seg">
+                <button type="button" class="segmented-option active" data-value="basic" onclick="_segmentedPick('ai-category','basic')">basic</button>
+                <button type="button" class="segmented-option" data-value="links" onclick="_segmentedPick('ai-category','links')">links</button>
+                <button type="button" class="segmented-option" data-value="contact" onclick="_segmentedPick('ai-category','contact')">contact</button>
+              </div>
+              <select id="ai-category" style="display:none">
+                <option value="basic" selected>basic</option>
+                <option value="links">links</option>
+                <option value="contact">contact</option>
+              </select>
+            </div>
+            <div class="field mb-8"><label>Title</label>
+              <input type="text" id="ai-title" placeholder="e.g. Persona tone" required>
+            </div>
+            <div class="field mb-8"><label>Description</label>
+              <textarea id="ai-description" rows="3" style="width:100%"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Add</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Add Stage</div>
+          <p class="text-muted text-sm mb-8" style="margin-top:4px">
+            A career stage — a job or period of education, with a timeframe.
+          </p>
+          <form onsubmit="addEntity(event, 'stages', 'as2')">
+            <div class="field mb-8"><label>Category</label>
+              <div class="segmented" id="as2-category-seg">
+                <button type="button" class="segmented-option active" data-value="job" onclick="_segmentedPick('as2-category','job')">job</button>
+                <button type="button" class="segmented-option" data-value="education" onclick="_segmentedPick('as2-category','education')">education</button>
+              </div>
+              <select id="as2-category" style="display:none">
+                <option value="job" selected>job</option>
+                <option value="education">education</option>
+              </select>
+            </div>
+            <div class="field mb-8"><label>Title</label>
+              <input type="text" id="as2-title" placeholder="e.g. Senior Engineer @ Acme" required>
+            </div>
+            <div class="field mb-8"><label>Description</label>
+              <textarea id="as2-description" rows="3" style="width:100%"></textarea>
+            </div>
+            <div class="form-row mb-8">
+              <div class="field field-sm"><label>Start Date</label>
+                <input type="text" id="as2-start" placeholder="2020-01">
+              </div>
+              <div class="field field-sm"><label>End Date</label>
+                <input type="text" id="as2-end" placeholder="2023-06">
+              </div>
+              <label class="checkbox-row switch" style="margin-top:20px">
+                <input type="checkbox" id="as2-current" onchange="document.getElementById('as2-end').disabled=this.checked"> Current
+              </label>
+            </div>
+            <button type="submit" class="btn btn-primary">Add</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Add Oeuvre Entry</div>
+          <p class="text-muted text-sm mb-8" style="margin-top:4px">
+            A piece of your work — a repo, article, book, talk, or website entry.
+          </p>
+          <form onsubmit="addEntity(event, 'oeuvre', 'ao')">
+            <div class="field mb-8"><label>Category</label>
+              <div class="segmented" id="ao-category-seg">
+                <button type="button" class="segmented-option active" data-value="coding" onclick="_segmentedPick('ao-category','coding')">coding</button>
+                <button type="button" class="segmented-option" data-value="blog_post" onclick="_segmentedPick('ao-category','blog_post')">blog_post</button>
+                <button type="button" class="segmented-option" data-value="article" onclick="_segmentedPick('ao-category','article')">article</button>
+                <button type="button" class="segmented-option" data-value="book" onclick="_segmentedPick('ao-category','book')">book</button>
+                <button type="button" class="segmented-option" data-value="website" onclick="_segmentedPick('ao-category','website')">website</button>
+              </div>
+              <select id="ao-category" style="display:none">
+                <option value="coding" selected>coding</option>
+                <option value="blog_post">blog_post</option>
+                <option value="article">article</option>
+                <option value="book">book</option>
+                <option value="website">website</option>
+              </select>
+            </div>
+            <div class="field mb-8"><label>Title</label>
+              <input type="text" id="ao-title" placeholder="e.g. My Talk Title" required>
+            </div>
+            <div class="field mb-8"><label>Description</label>
+              <textarea id="ao-description" rows="3" style="width:100%"></textarea>
+            </div>
+            <div class="form-row mb-8">
+              <div class="field field-md"><label>URL</label>
+                <input type="text" id="ao-url" placeholder="https://...">
+              </div>
+              <div class="field field-sm"><label>Date</label>
+                <input type="text" id="ao-date" placeholder="2023-01-15">
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Add</button>
+          </form>
+        </div>
+
+      </div>
+
+      <!-- ── Scrapers ─────────────────────────────────── -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">Data Sources</div>
-          <div class="flex gap-8">
+          <div>
+            <div class="card-title">Scrapers</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Live sources the system fetches automatically — GitHub, Medium, RSS feeds, sitemaps, etc.
+              Each scraper is tied to a connector that knows how to pull and parse that source.
+            </p>
+          </div>
+          <div class="flex gap-8 flex-wrap" style="flex-shrink:0;align-self:flex-start">
             <button class="btn btn-ghost btn-sm" onclick="loadSources()">Refresh</button>
-            <button class="btn btn-primary btn-sm" onclick="showAddSourceForm()">Add Source</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddSourceForm()">Add Scraper</button>
+            <button class="btn btn-ghost btn-sm" onclick="triggerAction('/enrich', 'Enrich All')">Re-enrich All</button>
+            <button class="btn btn-ghost btn-sm" onclick="triggerAction('/translate', 'Translate')">Translate Missing</button>
+            <button class="btn btn-ghost btn-sm" onclick="triggerAction('/extract-pdf', 'Extract PDF')">Re-extract PDF</button>
           </div>
         </div>
         <div id="sources-table" class="table-wrap"></div>
       </div>
+
+      <!-- ── Job History ───────────────────────────────── -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">File Upload</div>
+          <div class="card-title">Job History</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadJobs()">Refresh</button>
         </div>
-        <form id="upload-form" class="form-row">
+        <div id="jobs-table" class="table-wrap"></div>
+      </div>
+
+      <!-- ── File Upload ───────────────────────────────── -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">File Upload</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              For documents you already have locally — e.g. a LinkedIn profile PDF, an exported CV,
+              or any HTML page you saved manually. The file is parsed and ingested as a one-off entry;
+              no recurring scrape is set up.
+            </p>
+          </div>
+        </div>
+        <form id="upload-form" class="form-row" style="margin-top:12px">
           <div class="field field-lg">
             <label>PDF or HTML file</label>
             <input type="file" id="upload-file" accept=".pdf,.html,.htm">
           </div>
           <div class="field field-md">
-            <label>Link to source (optional)</label>
-            <input type="text" id="upload-source" placeholder="e.g. oeuvre.medium">
+            <label>Link to source <span class="text-muted">(optional)</span></label>
+            <input type="text" id="upload-source" placeholder="e.g. oeuvre.linkedin">
           </div>
-          <button type="submit" class="btn btn-primary">Upload</button>
+          <button type="submit" class="btn btn-primary" style="align-self:flex-end">Upload</button>
         </form>
         <div id="upload-result"></div>
       </div>
-    </div>
 
-    <!-- ── PROMPTS ────────────────────────────────── -->
-    <div id="tab-prompts" class="tab">
-      <div class="card">
-        <div class="card-head">
-          <div class="card-title">LLM System Prompts</div>
-          <button class="btn btn-ghost btn-sm" onclick="loadPrompts()">Refresh</button>
-        </div>
-        <p class="text-muted text-sm mb-12">System prompts used internally for LLM enrichment, translation, and chat.</p>
-        <div id="prompts-list"></div>
-      </div>
-      <div class="card" style="margin-top:16px">
-        <div class="card-head">
-          <div class="card-title">MCP Prompt Templates</div>
-          <div class="flex gap-8">
-            <button class="btn btn-primary btn-sm" onclick="addMcpPrompt()">+ Add</button>
-            <button class="btn btn-ghost btn-sm" onclick="loadMcpPrompts()">Refresh</button>
-          </div>
-        </div>
-        <p class="text-muted text-sm mb-12">User-facing prompt templates discoverable by LLM agents via <code>/prompts</code> API.</p>
-        <div id="mcp-prompts-list"></div>
-      </div>
     </div>
 
     <!-- ── SETTINGS ───────────────────────────────── -->
     <div id="tab-settings" class="tab">
+
+      <!-- LLM System Prompts -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">LLM System Prompts</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Internal instructions fed to the LLM during enrichment, translation, and chat. Not visible to API consumers.
+              <button class="help-btn" onclick="showSettingsHelp('system-prompts')" title="Learn more">?</button>
+            </p>
+          </div>
+          <button class="btn btn-ghost btn-sm" style="flex-shrink:0;align-self:flex-start" onclick="loadPrompts()">Refresh</button>
+        </div>
+        <div id="prompts-list" style="margin-top:8px"></div>
+      </div>
+
+      <!-- MCP Prompt Templates -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">MCP Prompt Templates</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              User-facing templates exposed via the <code>/prompts</code> API — AI agents discover and use these to query your profile.
+              <button class="help-btn" onclick="showSettingsHelp('mcp-prompts')" title="Learn more">?</button>
+            </p>
+          </div>
+          <div class="flex gap-8" style="flex-shrink:0;align-self:flex-start">
+            <button class="btn btn-primary btn-sm" onclick="addMcpPrompt()">+ Add</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadMcpPrompts()">Refresh</button>
+          </div>
+        </div>
+        <div id="mcp-prompts-list" style="margin-top:8px"></div>
+      </div>
+
       <!-- Chat Config -->
       <div class="card">
-        <div class="card-title mb-12">Chat Proxy Settings</div>
+        <div class="card-head">
+          <div>
+            <div class="card-title">Chat Proxy Settings</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Controls the conversational AI persona and LLM backend used by Telegram, Slack, and Discord bots.
+              <button class="help-btn" onclick="showSettingsHelp('chat')" title="Learn more">?</button>
+            </p>
+          </div>
+        </div>
         <div id="chat-config-form"></div>
       </div>
+
       <!-- Identity -->
       <div class="card">
-        <div class="card-title mb-12">Identity</div>
+        <div class="card-head">
+          <div>
+            <div class="card-title">Identity</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Your public profile data — name, tagline, links — exposed via the MCP API and used in chat responses.
+              <button class="help-btn" onclick="showSettingsHelp('identity')" title="Learn more">?</button>
+            </p>
+          </div>
+        </div>
         <div id="identity-config-form"></div>
       </div>
+
       <!-- i18n -->
       <div class="card">
-        <div class="card-title mb-12">Internationalization (i18n)</div>
+        <div class="card-head">
+          <div>
+            <div class="card-title">Internationalization</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Which languages your content gets automatically translated into during ingestion.
+              <button class="help-btn" onclick="showSettingsHelp('i18n')" title="Learn more">?</button>
+            </p>
+          </div>
+        </div>
         <div id="i18n-config-form"></div>
       </div>
+
       <!-- Metrics -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">Metrics Configuration</div>
-          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/recalculate-metrics', 'Recalculate')">Recalculate Metrics</button>
+          <div>
+            <div class="card-title">Metrics</div>
+            <p class="text-muted text-sm" style="margin-top:4px">
+              Weights and thresholds that drive proficiency scores, growth trends, and relevance rankings across your work history.
+              <button class="help-btn" onclick="showSettingsHelp('metrics')" title="Learn more">?</button>
+            </p>
+          </div>
+          <button class="btn btn-ghost btn-sm" style="flex-shrink:0;align-self:flex-start" onclick="triggerAction('/recalculate-metrics', 'Recalculate')">Recalculate</button>
         </div>
         <div id="metrics-config-form"></div>
       </div>
-    </div>
 
-    <!-- ── JOBS ───────────────────────────────────── -->
-    <div id="tab-jobs" class="tab">
-      <div class="card">
-        <div class="card-title mb-12">Trigger Job</div>
-        <form id="scrape-form">
-          <div class="form-row mb-8">
-            <div class="field field-lg">
-              <label>Source (leave empty for all)</label>
-              <input type="text" id="j-source" placeholder="e.g. github, blog, linkedin">
-            </div>
-          </div>
-          <div class="flex gap-12 flex-wrap mb-16">
-            <label class="checkbox-row">
-              <input type="checkbox" id="j-force"> Force re-scrape
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="j-no-llm"> Disable LLM
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="j-llm-only"> LLM only
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="j-yaml"> Export YAML
-            </label>
-          </div>
-          <button type="submit" class="btn btn-primary">Start Scrape Job</button>
-        </form>
-        <div class="flex gap-8 mt-12">
-          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/enrich', 'Enrich All')">Re-enrich All</button>
-          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/translate', 'Translate')">Translate Missing</button>
-          <button class="btn btn-ghost btn-sm" onclick="triggerAction('/extract-pdf', 'Extract PDF')">Re-extract PDF</button>
-        </div>
-        <div id="scrape-result"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <div class="card-title">Jobs</div>
-          <button class="btn btn-ghost btn-sm" onclick="loadJobs()">Refresh</button>
-        </div>
-        <div id="jobs-table" class="table-wrap"></div>
-      </div>
     </div>
 
     <!-- ── LOGS ───────────────────────────────────── -->

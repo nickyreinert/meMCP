@@ -12,6 +12,7 @@ let _jobsInterval = null;
 let _currentLogFile = null;
 let _dbOffset = 0;
 const _entityCache = {};
+const _validTabs = ['dashboard', 'tokens', 'database', 'sources', 'settings', 'logs'];
 
 // ────────────────────────────────────────────────────────
 // API LAYER
@@ -70,6 +71,35 @@ function _badge(cls, text) {
   return `<span class="badge badge-${_esc(cls)}">${_esc(text)}</span>`;
 }
 
+// Renders a segmented (pill multi-switch) control in place of a <select>
+// with <=5 options. Keeps a hidden native <select> with the same id so
+// existing `.value` reads and onchange handlers keep working untouched.
+// options: [{ value, label }]  |  onchange: optional inline handler string
+function _segmented(id, options, selectedValue, onchange) {
+  const sel = selectedValue ?? (options[0] && options[0].value) ?? '';
+  const buttons = options.map(o => `
+    <button type="button" class="segmented-option${o.value === sel ? ' active' : ''}"
+            data-value="${_esc(o.value)}"
+            onclick="_segmentedPick('${_esc(id)}', '${_esc(o.value)}')">${_esc(o.label)}</button>`
+  ).join('');
+  const selectOpts = options.map(o =>
+    `<option value="${_esc(o.value)}"${o.value === sel ? ' selected' : ''}>${_esc(o.label)}</option>`
+  ).join('');
+  return `
+    <div class="segmented" id="${_esc(id)}-seg">${buttons}</div>
+    <select id="${_esc(id)}" style="display:none"${onchange ? ` onchange="${onchange}"` : ''}>${selectOpts}</select>`;
+}
+
+function _segmentedPick(id, value) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  select.value = value;
+  document.querySelectorAll('#' + id + '-seg .segmented-option').forEach(b => {
+    b.classList.toggle('active', b.dataset.value === value);
+  });
+  select.dispatchEvent(new Event('change'));
+}
+
 function _fmtDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -96,6 +126,41 @@ function _err(containerId, msg) {
 // ────────────────────────────────────────────────────────
 // AUTH
 // ────────────────────────────────────────────────────────
+
+// Restore session from localStorage on page load (survives hard refresh,
+// cleared when the tab/browser closes).
+(function _restoreSession() {
+  try {
+    const stored = localStorage.getItem('memcp_creds');
+    if (stored) _creds = JSON.parse(stored);
+  } catch (_) {}
+})();
+
+function _initialTab() {
+  const name = location.hash.slice(1);
+  return _validTabs.includes(name) ? name : 'dashboard';
+}
+
+async function _tryAutoLogin() {
+  if (!_creds) return;
+  try {
+    const resp = await fetch('/tokens', {
+      headers: { 'Authorization': _basicAuth() },
+      credentials: 'omit',
+    });
+    if (!resp.ok) { _creds = null; localStorage.removeItem('memcp_creds'); return; }
+    document.getElementById('login-screen').style.display = 'none';
+    const readiness = await api('GET', '/config/readiness');
+    if (readiness && readiness.needs_wizard) {
+      _startWizard(readiness);
+    } else {
+      document.getElementById('app').style.display = 'block';
+      _showTab(_initialTab(), { fromHash: true });
+    }
+  } catch (_) { _creds = null; localStorage.removeItem('memcp_creds'); }
+}
+_tryAutoLogin();
+
 document.getElementById('login-form').addEventListener('submit', async e => {
   e.preventDefault();
   const btn   = document.getElementById('login-btn');
@@ -120,6 +185,7 @@ document.getElementById('login-form').addEventListener('submit', async e => {
     }
     if (!resp.ok) throw new Error('Server error ' + resp.status);
 
+    localStorage.setItem('memcp_creds', JSON.stringify(_creds));
     document.getElementById('login-screen').style.display = 'none';
 
     // Check if wizard is needed
@@ -129,11 +195,11 @@ document.getElementById('login-form').addEventListener('submit', async e => {
         _startWizard(readiness);
       } else {
         document.getElementById('app').style.display = 'block';
-        _showTab('dashboard');
+        _showTab(_initialTab(), { fromHash: true });
       }
     } catch (_) {
       document.getElementById('app').style.display = 'block';
-      _showTab('dashboard');
+      _showTab(_initialTab(), { fromHash: true });
     }
   } catch (ex) {
     errEl.textContent   = ex.message;
@@ -149,6 +215,7 @@ document.getElementById('logout-btn').addEventListener('click', _logout);
 
 function _logout() {
   _creds = null;
+  localStorage.removeItem('memcp_creds');
   _stopJobPolling();
   document.getElementById('app').style.display = 'none';
   document.getElementById('wizard-screen').style.display = 'none';
@@ -164,7 +231,8 @@ document.getElementById('main-nav').addEventListener('click', e => {
   if (btn) _showTab(btn.dataset.tab);
 });
 
-function _showTab(name) {
+function _showTab(name, opts) {
+  opts = opts || {};
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === name);
@@ -173,20 +241,30 @@ function _showTab(name) {
   if (el) el.classList.add('active');
   _currentTab = name;
 
+  if (!opts.fromHash && location.hash.slice(1) !== name) {
+    location.hash = name;
+  }
+
   _stopJobPolling();
 
   if      (name === 'dashboard') _loadDashboard();
   else if (name === 'tokens')    loadTokens();
   else if (name === 'logs')      loadLogs();
   else if (name === 'database')  browseDB(0);
-  else if (name === 'sources')   loadSources();
-  else if (name === 'prompts')   { loadPrompts(); loadMcpPrompts(); }
-  else if (name === 'settings')  loadSettings();
-  else if (name === 'jobs') {
+  else if (name === 'sources') {
+    loadSources();
     loadJobs();
     _jobsInterval = setInterval(loadJobs, 5000);
   }
+  else if (name === 'settings')  { loadPrompts(); loadMcpPrompts(); loadSettings(); }
 }
+
+window.addEventListener('hashchange', () => {
+  const name = location.hash.slice(1);
+  if (_validTabs.includes(name) && name !== _currentTab) {
+    _showTab(name, { fromHash: true });
+  }
+});
 
 function _stopJobPolling() {
   if (_jobsInterval) { clearInterval(_jobsInterval); _jobsInterval = null; }
@@ -510,6 +588,8 @@ function reloadLog() {
 // ────────────────────────────────────────────────────────
 
 let _dbCurrentView = 'table';
+let _careerData = null;
+let _careerFlavor = '';
 
 function setDbView(view) {
   _dbCurrentView = view;
@@ -520,63 +600,103 @@ function setDbView(view) {
   if (view === 'career') loadCareerView();
 }
 
+function setCareerFlavor(btn, flavor) {
+  _careerFlavor = flavor;
+  document.querySelectorAll('.career-toggle').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderCareerView();
+}
+
+function filterCareerView() { renderCareerView(); }
+
 async function loadCareerView() {
-  const el = document.getElementById('career-render');
-  el.innerHTML = '<div class="loading-block"><span class="spinner"></span> Loading…</div>';
-  try {
-    const [stagesData, oeuvreData, identityData] = await Promise.all([
-      api('GET', '/db?flavor=stages&limit=500'),
-      api('GET', '/db?flavor=oeuvre&limit=500'),
-      api('GET', '/db?flavor=identity&limit=50'),
-    ]);
-
-    let html = '';
-
-    // ── Identity / Profile ──────────────────────────────
-    const identity = (identityData?.entities || []);
-    if (identity.length) {
-      const intro = identity.find(e => e.category === 'intro' || e.title?.toLowerCase().includes('bio') || e.title?.toLowerCase().includes('about'));
-      const contact = identity.find(e => e.category === 'contact' || e.title?.toLowerCase().includes('contact'));
-      if (intro || contact) {
-        html += `<div class="card mb-12">
-          <div class="card-title mb-8">Profile</div>
-          ${intro ? `<p style="margin-bottom:8px">${_esc(intro.description || intro.title || '')}</p>` : ''}
-          ${contact ? `<p class="text-muted text-sm">${_esc(contact.description || contact.title || '')}</p>` : ''}
-        </div>`;
-      }
+  if (!_careerData) {
+    const el = document.getElementById('career-render');
+    el.innerHTML = '<div class="loading-block"><span class="spinner"></span> Loading…</div>';
+    try {
+      const [stagesData, oeuvreData, identityData] = await Promise.all([
+        api('GET', '/db?flavor=stages&limit=500'),
+        api('GET', '/db?flavor=oeuvre&limit=500'),
+        api('GET', '/db?flavor=identity&limit=50'),
+      ]);
+      _careerData = {
+        stages: (stagesData?.entities || []).sort((a, b) => (b.start_date || b.date || '').localeCompare(a.start_date || a.date || '')),
+        oeuvre: (oeuvreData?.entities || []).sort((a, b) => (b.date || b.start_date || '').localeCompare(a.date || a.start_date || '')),
+        identity: identityData?.entities || [],
+      };
+    } catch (ex) {
+      document.getElementById('career-render').innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
+      return;
     }
+  }
+  renderCareerView();
+}
 
-    // ── Career Stages ───────────────────────────────────
-    const stages = (stagesData?.entities || []).sort((a, b) => {
-      const da = a.start_date || a.date || '';
-      const db2 = b.start_date || b.date || '';
-      return db2.localeCompare(da);
-    });
+function renderCareerView() {
+  const q = (document.getElementById('career-search')?.value || '').toLowerCase().trim();
+  const flavor = _careerFlavor;
+  const el = document.getElementById('career-render');
+  if (!_careerData) return;
 
+  function matchesFilter(e) {
+    if (!q) return true;
+    const allTags = [...(e.technologies || []), ...(e.skills || []), ...(e.tags || [])];
+    return (e.title || '').toLowerCase().includes(q) ||
+      (e.description || '').toLowerCase().includes(q) ||
+      allTags.some(t => t.toLowerCase().includes(q));
+  }
+
+  let totalShown = 0;
+  let html = '';
+
+  // ── Identity (no filter) ────────────────────────────
+  if (!flavor || flavor === 'identity') {
+    const intro = _careerData.identity.find(e =>
+      e.category === 'intro' || e.title?.toLowerCase().includes('bio') || e.title?.toLowerCase().includes('about'));
+    const contact = _careerData.identity.find(e =>
+      e.category === 'contact' || e.title?.toLowerCase().includes('contact'));
+    if ((intro || contact) && !q) {
+      html += `<div class="card mb-12">
+        <div class="card-title mb-8">Profile</div>
+        ${intro ? `<p style="margin-bottom:8px">${_esc(intro.description || intro.title || '')}</p>` : ''}
+        ${contact ? `<p class="text-muted text-sm">${_esc(contact.description || contact.title || '')}</p>` : ''}
+      </div>`;
+    }
+  }
+
+  // ── Career Stages ───────────────────────────────────
+  if (!flavor || flavor === 'stages') {
     const catOrder = ['job', 'education', 'other'];
     const catLabel = { job: 'Work Experience', education: 'Education', other: 'Other' };
     const grouped = {};
-    for (const e of stages) {
+    for (const e of _careerData.stages) {
+      if (!matchesFilter(e)) continue;
       const cat = e.category || 'other';
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(e);
     }
-
     for (const cat of catOrder) {
       const items = grouped[cat];
       if (!items?.length) continue;
+      totalShown += items.length;
       html += `<div class="card mb-12">
-        <div class="card-title mb-12">${_esc(catLabel[cat] || cat)}</div>
+        <div class="card-title mb-12">${_esc(catLabel[cat] || cat)} <span class="text-muted" style="font-weight:normal;font-size:0.85em">(${items.length})</span></div>
         <div class="timeline">`;
       for (const e of items) {
         const start = e.start_date ? e.start_date.slice(0, 7) : '';
-        const end = e.end_date ? e.end_date.slice(0, 7) : (e.is_current ? 'present' : '');
+        const end   = e.end_date   ? e.end_date.slice(0, 7)   : (e.is_current ? 'present' : '');
         const dateStr = start ? (end ? `${start} – ${end}` : start) : '';
         const tagList = [...(e.technologies || []), ...(e.skills || []), ...(e.tags || [])].slice(0, 8);
         html += `<div class="timeline-item">
           <div class="timeline-dot"></div>
           <div class="timeline-body">
-            <div class="timeline-title">${_esc(e.title || '—')}</div>
+            <div class="timeline-title-row">
+              <span>${_esc(e.title || '—')}</span>
+              <span class="career-actions">
+                <button class="btn btn-ghost btn-xs" onclick="editEntity('${_esc(e.id)}')">Edit</button>
+                <button class="btn btn-danger btn-xs" onclick="deleteEntityUI('${_esc(e.id)}','${_esc((e.title||'').replace(/'/g,"\\'"))}')">Del</button>
+              </span>
+            </div>
             ${dateStr ? `<div class="timeline-date">${_esc(dateStr)}</div>` : ''}
             ${e.description ? `<div class="timeline-desc text-sm">${_esc(e.description)}</div>` : ''}
             ${tagList.length ? `<div class="timeline-tags">${tagList.map(t => `<span class="badge badge-generic">${_esc(t)}</span>`).join('')}</div>` : ''}
@@ -585,27 +705,23 @@ async function loadCareerView() {
       }
       html += '</div></div>';
     }
+  }
 
-    // ── Oeuvre ──────────────────────────────────────────
-    const oeuvre = (oeuvreData?.entities || []).sort((a, b) => {
-      const da = a.date || a.start_date || '';
-      const db2 = b.date || b.start_date || '';
-      return db2.localeCompare(da);
-    });
-
+  // ── Oeuvre ──────────────────────────────────────────
+  if (!flavor || flavor === 'oeuvre') {
     const oeuvreOrder = ['coding', 'blog_post', 'article', 'book', 'website', 'other'];
     const oeuvreLabel = { coding: 'Projects & Code', blog_post: 'Blog Posts', article: 'Articles', book: 'Books', website: 'Websites', other: 'Other Work' };
     const oeuvreGrouped = {};
-    for (const e of oeuvre) {
+    for (const e of _careerData.oeuvre) {
+      if (!matchesFilter(e)) continue;
       const cat = e.category || 'other';
       if (!oeuvreGrouped[cat]) oeuvreGrouped[cat] = [];
       oeuvreGrouped[cat].push(e);
     }
-
-    const oeuvreCategories = [...new Set([...oeuvreOrder, ...Object.keys(oeuvreGrouped)])];
-    for (const cat of oeuvreCategories) {
+    for (const cat of [...new Set([...oeuvreOrder, ...Object.keys(oeuvreGrouped)])]) {
       const items = oeuvreGrouped[cat];
       if (!items?.length) continue;
+      totalShown += items.length;
       html += `<div class="card mb-12">
         <div class="card-title mb-12">${_esc(oeuvreLabel[cat] || cat)} <span class="text-muted" style="font-weight:normal;font-size:0.85em">(${items.length})</span></div>
         <div class="oeuvre-grid">`;
@@ -613,7 +729,13 @@ async function loadCareerView() {
         const dateStr = (e.date || e.start_date || '').slice(0, 7);
         const tagList = [...(e.technologies || []), ...(e.skills || [])].slice(0, 5);
         html += `<div class="oeuvre-card">
-          <div class="oeuvre-title">${e.url ? `<a href="${_esc(e.url)}" target="_blank">${_esc(e.title || '—')}</a>` : _esc(e.title || '—')}</div>
+          <div class="oeuvre-title-row">
+            <div class="oeuvre-title">${e.url ? `<a href="${_esc(e.url)}" target="_blank">${_esc(e.title || '—')}</a>` : _esc(e.title || '—')}</div>
+            <span class="career-actions">
+              <button class="btn btn-ghost btn-xs" onclick="editEntity('${_esc(e.id)}')">Edit</button>
+              <button class="btn btn-danger btn-xs" onclick="deleteEntityUI('${_esc(e.id)}','${_esc((e.title||'').replace(/'/g,"\\'"))}')">Del</button>
+            </span>
+          </div>
           ${dateStr ? `<div class="text-muted text-sm">${_esc(dateStr)}</div>` : ''}
           ${e.description ? `<div class="text-sm" style="margin-top:4px;opacity:0.85">${_esc(e.description.slice(0, 160))}${e.description.length > 160 ? '…' : ''}</div>` : ''}
           ${tagList.length ? `<div style="margin-top:6px">${tagList.map(t => `<span class="badge badge-generic">${_esc(t)}</span>`).join('')}</div>` : ''}
@@ -621,11 +743,11 @@ async function loadCareerView() {
       }
       html += '</div></div>';
     }
-
-    el.innerHTML = html || '<div class="empty">No data found.</div>';
-  } catch (ex) {
-    el.innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
   }
+
+  el.innerHTML = html || '<div class="empty">No entries match your filter.</div>';
+  const countEl = document.getElementById('career-count');
+  if (countEl) countEl.textContent = q || flavor ? `${totalShown} shown` : '';
 }
 
 async function browseDB(offset) {
@@ -719,19 +841,17 @@ async function editEntity(id) {
       <form id="entity-edit-form" onsubmit="saveEntity(event, '${_esc(e.id)}')">
         <div class="form-row mb-8">
           <div class="field field-sm"><label>Flavor</label>
-            <select id="ee-flavor">
-              ${['personal','stages','oeuvre','identity'].map(f =>
-                `<option ${e.flavor===f?'selected':''}>${f}</option>`).join('')}
-            </select>
+            ${_segmented('ee-flavor',
+              ['personal','stages','oeuvre','identity'].map(f => ({ value: f, label: f })),
+              e.flavor)}
           </div>
           <div class="field field-sm"><label>Category</label>
             <input type="text" id="ee-category" value="${_esc(e.category||'')}">
           </div>
           <div class="field field-sm"><label>Visibility</label>
-            <select id="ee-visibility">
-              <option ${e.visibility==='public'?'selected':''}>public</option>
-              <option ${e.visibility==='private'?'selected':''}>private</option>
-            </select>
+            ${_segmented('ee-visibility',
+              [{ value: 'public', label: 'public' }, { value: 'private', label: 'private' }],
+              e.visibility)}
           </div>
         </div>
         <div class="field mb-8"><label>Title</label>
@@ -758,7 +878,7 @@ async function editEntity(id) {
           <div class="field field-sm"><label>Date</label>
             <input type="text" id="ee-date" value="${_esc(e.date||'')}" placeholder="2023-01-15">
           </div>
-          <label class="checkbox-row" style="margin-top:20px">
+          <label class="checkbox-row switch" style="margin-top:20px">
             <input type="checkbox" id="ee-current" ${e.is_current?'checked':''}> Current
           </label>
         </div>
@@ -848,9 +968,12 @@ async function loadSources() {
             <td>${_badge(s.llm_processing ? 'yes' : 'no', s.llm_processing ? 'yes' : 'no')}</td>
             <td>${_badge(s.enabled !== false ? 'active' : 'revoked', s.enabled !== false ? 'yes' : 'no')}</td>
             <td>
-              ${s.id.startsWith('oeuvre.')
-                ? `<button class="btn btn-danger btn-sm" onclick="deleteSource('${_esc(s.id)}')">Delete</button>`
-                : '<span class="text-muted text-sm">—</span>'}
+              <div class="flex gap-8">
+                <button class="btn btn-primary btn-sm" onclick="showRunSourceForm('${_esc(s.id)}')">Run</button>
+                ${s.id.startsWith('oeuvre.')
+                  ? `<button class="btn btn-danger btn-sm" onclick="deleteSource('${_esc(s.id)}')">Delete</button>`
+                  : ''}
+              </div>
             </td>
           </tr>`).join('')}
         </tbody>
@@ -864,6 +987,50 @@ async function deleteSource(id) {
     await api('DELETE', '/sources/' + encodeURIComponent(id));
     loadSources();
   } catch (ex) { alert('Error: ' + ex.message); }
+}
+
+function showRunSourceForm(sourceId) {
+  _openModal('Run scrape — ' + sourceId, `
+    <form onsubmit="runSourceScrape(event, '${_esc(sourceId)}')">
+      <div class="flex gap-12 flex-wrap mb-16">
+        <label class="checkbox-row switch">
+          <input type="checkbox" id="rs-force"> Force re-scrape
+        </label>
+        <label class="checkbox-row switch">
+          <input type="checkbox" id="rs-no-llm"> Disable LLM
+        </label>
+        <label class="checkbox-row switch">
+          <input type="checkbox" id="rs-llm-only"> LLM only
+        </label>
+        <label class="checkbox-row switch">
+          <input type="checkbox" id="rs-yaml"> Export YAML
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary">Start Scrape</button>
+    </form>
+    <div id="run-source-result" style="margin-top:12px"></div>`);
+}
+
+async function runSourceScrape(event, sourceId) {
+  event.preventDefault();
+  const body = {
+    source: sourceId,
+    force: document.getElementById('rs-force').checked,
+    disable_llm: document.getElementById('rs-no-llm').checked,
+    llm_only: document.getElementById('rs-llm-only').checked,
+    export_yaml: document.getElementById('rs-yaml').checked,
+  };
+  const result = document.getElementById('run-source-result');
+  try {
+    const data = await api('POST', '/scrape', body);
+    if (!data) return;
+    result.innerHTML = `<div class="alert alert-success">
+      Job started — ID: <strong>${_esc(data.job_id)}</strong>
+    </div>`;
+    loadJobs();
+  } catch (ex) {
+    result.innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
+  }
 }
 
 function showAddSourceForm() {
@@ -895,12 +1062,45 @@ function showAddSourceForm() {
         <div class="field field-sm"><label>Limit</label>
           <input type="number" id="as-limit" value="0" min="0">
         </div>
-        <label class="checkbox-row" style="margin-top:20px">
+        <label class="checkbox-row switch" style="margin-top:20px">
           <input type="checkbox" id="as-llm" checked> LLM processing
         </label>
       </div>
       <button type="submit" class="btn btn-primary">Add</button>
     </form>`);
+}
+
+async function addEntity(event, flavor, prefix) {
+  event.preventDefault();
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.value.trim() : '';
+  };
+  const body = {
+    flavor,
+    category: val(prefix + '-category') || null,
+    title: val(prefix + '-title'),
+    description: val(prefix + '-description') || null,
+  };
+  const urlEl = document.getElementById(prefix + '-url');
+  if (urlEl) body.url = urlEl.value.trim() || null;
+  const dateEl = document.getElementById(prefix + '-date');
+  if (dateEl) body.date = dateEl.value.trim() || null;
+  const startEl = document.getElementById(prefix + '-start');
+  if (startEl) body.start_date = startEl.value.trim() || null;
+  const endEl = document.getElementById(prefix + '-end');
+  if (endEl) body.end_date = endEl.value.trim() || null;
+  const currentEl = document.getElementById(prefix + '-current');
+  if (currentEl) body.is_current = currentEl.checked;
+
+  try {
+    await api('POST', '/db', body);
+    alert('Entity added.');
+    event.target.reset();
+    document.querySelectorAll(`#${prefix}-category-seg .segmented-option`).forEach((b, i) => {
+      b.classList.toggle('active', i === 0);
+    });
+  } catch (ex) { alert('Error: ' + ex.message); }
 }
 
 async function addSource(event) {
@@ -953,6 +1153,10 @@ document.getElementById('upload-form').addEventListener('submit', async e => {
 // ────────────────────────────────────────────────────────
 // PROMPTS
 // ────────────────────────────────────────────────────────
+function _togglePromptRow(el) {
+  el.closest('.prompt-row').classList.toggle('open');
+}
+
 async function loadPrompts() {
   _loading('prompts-list');
   try {
@@ -964,7 +1168,6 @@ async function loadPrompts() {
       return;
     }
 
-    // Group by category
     const grouped = {};
     data.prompts.forEach(p => {
       if (!grouped[p.category]) grouped[p.category] = [];
@@ -973,15 +1176,19 @@ async function loadPrompts() {
 
     let html = '';
     for (const [cat, prompts] of Object.entries(grouped)) {
-      html += `<div class="mb-16">
-        <h3 class="card-title mb-8">${_esc(cat)}</h3>
+      html += `<div style="margin-bottom:20px">
+        <h3 class="card-title mb-8" style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)">${_esc(cat)}</h3>
         ${prompts.map(p => `
-          <div class="flex gap-8 items-center mb-8" style="border-bottom:1px solid var(--border);padding-bottom:8px">
-            <div style="flex:1">
-              <strong>${_esc(p.name)}</strong>
-              <span class="text-muted text-sm">(${_esc(p.prompt_id)}, v${p.version})</span>
+          <div class="prompt-row">
+            <div class="prompt-row-head" onclick="_togglePromptRow(this)">
+              <span class="prompt-toggle-icon">▶</span>
+              <span class="prompt-name">${_esc(p.name)}</span>
+              <span class="text-muted text-sm" style="font-size:11px">${_esc(p.prompt_id)} · v${p.version}</span>
+              <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();editPrompt('${_esc(p.prompt_id)}')">Edit</button>
             </div>
-            <button class="btn btn-ghost btn-sm" onclick="editPrompt('${_esc(p.prompt_id)}')">Edit</button>
+            <div class="prompt-body">
+              <div class="prompt-content">${_esc(p.content || '')}</div>
+            </div>
           </div>`).join('')}
       </div>`;
     }
@@ -1037,15 +1244,20 @@ async function loadMcpPrompts() {
         '<div class="empty">No MCP prompts found. Run seed to populate defaults.</div>';
       return;
     }
-    let html = data.prompts.map(p => `
-      <div class="flex gap-8 items-center mb-8" style="border-bottom:1px solid var(--border);padding-bottom:8px">
-        <div style="flex:1">
-          <strong>${_esc(p.name)}</strong>
-          <span class="text-muted text-sm">(${_esc(p.id)})</span>
-          <div class="text-muted text-sm">${_esc(p.description)}</div>
+    const html = data.prompts.map(p => `
+      <div class="prompt-row">
+        <div class="prompt-row-head" onclick="_togglePromptRow(this)">
+          <span class="prompt-toggle-icon">▶</span>
+          <span class="prompt-name">${_esc(p.name)}</span>
+          <span class="text-muted text-sm" style="font-size:11px;flex:1">${_esc(p.id)}</span>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();editMcpPrompt('${_esc(p.id)}')">Edit</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();deleteMcpPrompt('${_esc(p.id)}')">Delete</button>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="editMcpPrompt('${_esc(p.id)}')">Edit</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteMcpPrompt('${_esc(p.id)}')">Delete</button>
+        <div class="prompt-body">
+          ${p.description ? `<p class="text-muted text-sm" style="margin-bottom:8px">${_esc(p.description)}</p>` : ''}
+          ${p.use_case    ? `<p class="text-muted text-sm" style="margin-bottom:8px"><strong>Use case:</strong> ${_esc(p.use_case)}</p>` : ''}
+          <div class="prompt-content">${_esc(p.prompt_template || '')}</div>
+        </div>
       </div>`).join('');
     document.getElementById('mcp-prompts-list').innerHTML = html;
   } catch (ex) { _err('mcp-prompts-list', ex.message); }
@@ -1149,6 +1361,166 @@ async function loadSettings() {
   }
 }
 
+const _settingsHelp = {
+  chat: {
+    title: 'Chat Proxy Settings',
+    body: `
+      <p>These settings control the AI chat interface that powers the Telegram, Slack, and Discord bots (requires the Chat Proxy service to be running).</p>
+      <h4 style="margin:16px 0 6px">Persona</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Name</strong> — the name the bot introduces itself as in conversation.</li>
+        <li><strong>Tagline</strong> — a one-liner shown in bot descriptions or welcome messages.</li>
+        <li><strong>Tone</strong> — free-text instruction to the LLM, e.g. "professional but approachable".</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">LLM Backend</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Host</strong> — which LLM provider to use: <code>groq</code> (cloud, fast) or <code>ollama</code> (local).</li>
+        <li><strong>Model</strong> — the model ID, e.g. <code>llama3-8b-8192</code> for Groq or <code>llama3</code> for Ollama.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Limits</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Rate limit/min</strong> — max messages per user per minute to prevent abuse.</li>
+        <li><strong>Max history</strong> — how many past turns are sent as context to the LLM.</li>
+        <li><strong>Max input / output chars</strong> — hard caps on message length in both directions.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Starters</h4>
+      <p>Suggested questions shown to new users (one per line). Displayed as quick-reply buttons in supported clients.</p>`
+  },
+  identity: {
+    title: 'Identity',
+    body: `
+      <p>Your public profile data — one entry per language. This is what the MCP API returns when an agent asks "who are you?" and what the chat bot uses to introduce you.</p>
+      <ul style="padding-left:18px;line-height:1.8;margin-top:10px">
+        <li><strong>Name / Tagline / Location</strong> — shown in profile cards and chat introductions.</li>
+        <li><strong>Description</strong> — a longer bio used as context when the LLM answers questions about you.</li>
+        <li><strong>URLs</strong> — GitHub, LinkedIn, Blog, Medium links surfaced by the MCP <code>/tools</code> endpoint.</li>
+      </ul>
+      <p style="margin-top:12px">Add a new language block by running seed with that language configured in <em>Internationalization</em> settings first.</p>`
+  },
+  i18n: {
+    title: 'Internationalization',
+    body: `
+      <p>Controls automatic translation of ingested content. After each scrape or file upload, the system runs a translation pass for every language listed here.</p>
+      <ul style="padding-left:18px;line-height:1.8;margin-top:10px">
+        <li><strong>Target Languages</strong> — ISO 639-1 codes, comma-separated (e.g. <code>de, fr, es</code>). English source is always kept.</li>
+        <li><strong>Batch sleep (seconds)</strong> — pause between LLM translation calls to stay within rate limits. Increase if you see throttling errors from your LLM provider.</li>
+      </ul>
+      <p style="margin-top:12px">Translations are stored alongside the original in the database and served transparently by the MCP API based on the requester's language preference.</p>`
+  },
+  'system-prompts': {
+    title: 'LLM System Prompts',
+    body: `
+      <p>These prompts are the hidden instructions the system injects when calling the LLM for internal tasks. They are never exposed to end users or API consumers.</p>
+      <h4 style="margin:16px 0 6px">What each prompt does</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>description_system</strong> — writes the 1-3 sentence factual description shown for a scraped project, job, or article (mentions specific technologies by name, kept under 60 words).</li>
+        <li><strong>tag_system</strong> — suggests 3-8 relevant tags (e.g. Python, Docker, GenAI) for a piece of content during enrichment.</li>
+        <li><strong>type_system</strong> — classifies scraped content into an entity category (professional, company, education, side_project, technology, skill, etc.).</li>
+        <li><strong>linkedin_pdf_extraction</strong> — parses an uploaded LinkedIn PDF export into structured JSON (roles, dates, companies, skills) during File Upload.</li>
+        <li><strong>translation_system</strong> — translates content into a target language, preserving technical terms, dates, URLs, and professional tone.</li>
+        <li><strong>greeting_system</strong> — translates your personal bio/greeting text specifically, keeping first-person voice and proper nouns intact.</li>
+        <li><strong>chat_system</strong> — the system prompt injected at the start of every conversation in the Chat Proxy, defining persona, tone, and tool-use rules.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Editing</h4>
+      <p>Click <em>Edit</em> on any prompt to modify its content. Changes take effect on the next LLM call — no restart needed. Use <code>{placeholders}</code> syntax for dynamic values injected at runtime.</p>
+      <p style="margin-top:10px;color:var(--text-muted);font-size:13px">Prompts are versioned. The version number increments on each save so you can track changes over time.</p>`
+  },
+  'mcp-prompts': {
+    title: 'MCP Prompt Templates',
+    body: `
+      <p>These templates are part of the public MCP interface. Any AI agent connected to your MCP server can discover them via the <code>GET /prompts</code> endpoint and use them to query your profile in a structured way.</p>
+      <h4 style="margin:16px 0 6px">Fields</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>ID</strong> — kebab-case identifier used in the API response (e.g. <code>summarize-career</code>).</li>
+        <li><strong>Name</strong> — human-readable label shown in agent UIs.</li>
+        <li><strong>Description</strong> — what this prompt does; shown to the agent when it lists available prompts.</li>
+        <li><strong>Use Case</strong> — a hint for the agent about when to invoke this prompt.</li>
+        <li><strong>Template</strong> — the actual prompt text. Use <code>{variable}</code> syntax for runtime substitution.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">When to add one</h4>
+      <p>Add a template whenever you want to give an AI agent a reliable, pre-defined way to ask about a specific aspect of your profile — e.g. "list all skills in category X" or "summarize projects from year Y".</p>`
+  },
+  entities: {
+    title: 'Entities',
+    body: `
+      <p>An entity is a single record of your profile data — one job, one project, one blog post, one bio fact. All of them live in a single database table, distinguished by a "flavor".</p>
+      <h4 style="margin:16px 0 6px">Flavors</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>personal</strong> — static info such as name, bio, greetings, contact details.</li>
+        <li><strong>stages</strong> — career stages (education, jobs) with a timeframe.</li>
+        <li><strong>oeuvre</strong> — your work: repos, articles, books, talks.</li>
+        <li><strong>identity</strong> — one-off identity facts used to configure the assistant persona.</li>
+      </ul>
+      <p>This count is what an AI agent sees when it queries your MCP server — the more entities, the richer the profile it can draw on.</p>`
+  },
+  tokens: {
+    title: 'API Tokens',
+    body: `
+      <p>Tokens are the primary access-control mechanism for your MCP server. Any client (an AI agent, a browser app, a bot) that wants to call your API must include a valid token in the request header.</p>
+      <h4 style="margin:16px 0 6px">Fields</h4>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Owner</strong> — a human-readable label for who holds this token. Not used for authentication; purely for your reference (e.g. <code>claude-desktop</code>, <code>my-website</code>).</li>
+        <li><strong>Days valid</strong> — how long until the token expires. After expiry it is automatically rejected. Use short lifetimes (30–90 days) for external clients; longer for personal tools.</li>
+        <li><strong>Tier</strong> — controls which endpoints the token can reach. See the Tier help for details.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Security</h4>
+      <p>The raw token value is only shown once, at creation. It is stored hashed in the database — if you lose it, revoke and create a new one. Never commit tokens to version control.</p>`
+  },
+  'token-tiers': {
+    title: 'Token Tiers',
+    body: `
+      <p>Tiers let you issue tokens with different access levels to different consumers.</p>
+      <h4 style="margin:16px 0 6px">mcp</h4>
+      <p>Full read access to all MCP endpoints — <code>/resources</code>, <code>/tools</code>, <code>/prompts</code>, and query APIs. Use this tier for AI agents, Claude Desktop, or any tool that needs to read your profile data.</p>
+      <h4 style="margin:16px 0 6px">chat</h4>
+      <p>Access to the conversational Chat Proxy endpoint only. Use this for external clients that should be able to chat but not query raw profile data directly.</p>
+      <p style="margin-top:12px;color:var(--text-muted);font-size:13px">Additional tiers can be defined in the access-control config if you need finer-grained control.</p>`
+  },
+  metrics: {
+    title: 'Metrics',
+    body: `
+      <p>Drives the computed scores visible in the Database view. Scores are re-calculated whenever you click <em>Recalculate</em> or after a new ingestion run.</p>
+      <h4 style="margin:16px 0 6px">Proficiency</h4>
+      <p>How skilled you are at a technology, derived from recency and duration of use.</p>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Recency weight</strong> — how much recent usage counts vs. historical (0–1, total with duration weight = 1).</li>
+        <li><strong>Duration weight</strong> — how much total time spent counts.</li>
+        <li><strong>Halflife (years)</strong> — how quickly older usage decays in value.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Experience</h4>
+      <p>Total years using a skill or technology. Overlapping time periods (e.g. two concurrent jobs both using the same tech) count once, not twice, unless you turn deduplication off. Skills still in active/current use get a bonus multiplier, so an active skill outranks a stale one of the same total duration.</p>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Deduplicate overlaps</strong> — merge overlapping date ranges before summing years, instead of double-counting concurrent usage.</li>
+        <li><strong>Current bonus</strong> — multiplier applied to skills still in use today (e.g. 1.2 = +20%).</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Diversity</h4>
+      <p>Rewards using a skill across <em>different kinds</em> of work — both a job and a side project, say — rather than repeatedly in one place. Computed as a blend of how many different flavors (career stage vs. personal work) and how many different categories (job, coding, article, etc.) the skill shows up in, each measured on a log scale so the 5th occurrence matters far less than the 1st.</p>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Flavor weight / Category weight</strong> — how much each dimension contributes to the final diversity score (should sum to ~1.0).</li>
+        <li><strong>Saturation threshold</strong> — the count of unique flavors/categories at which the log-scale score is considered "maxed out".</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Growth</h4>
+      <p>Fits a simple trend line to how many entities mention a skill per year. The tag is labeled <strong>increasing</strong> if the slope is above the increasing threshold, <strong>decreasing</strong> if below the decreasing threshold, otherwise <strong>stable</strong>. Skills with too little history (below the minimum timespan or entity count) are always reported as stable, since there isn't enough data to call a trend.</p>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Min timespan / Min entity count</strong> — the minimum history required before a trend is computed at all.</li>
+        <li><strong>Increasing / Decreasing threshold</strong> — the slope cutoffs that decide the label.</li>
+      </ul>
+      <h4 style="margin:16px 0 6px">Relevance Weights</h4>
+      <p>The final ranking score used when the MCP API answers "what am I good at" style queries. It blends Proficiency, Frequency (how often the tag appears at all), Recency, Diversity, Experience, and Growth by these weights — they should sum to roughly 1.0. Raising one weight makes that dimension matter more when ranking skills.</p>
+      <ul style="padding-left:18px;line-height:1.8">
+        <li><strong>Current bonus / Stale penalty</strong> — flat point adjustments applied on top of the weighted blend for skills that are actively used vs. untouched for a long time.</li>
+        <li><strong>Stale threshold (years)</strong> — how long since last use before the stale penalty kicks in.</li>
+      </ul>
+      <p style="margin-top:10px;color:var(--text-muted);font-size:13px">The Metrics card also shows a live preview of your top 5 skills by proficiency, refreshed automatically every time you save this config.</p>`
+  },
+};
+
+function showSettingsHelp(section) {
+  const h = _settingsHelp[section];
+  if (!h) return;
+  _openModal(h.title, `<div style="line-height:1.7;font-size:14px">${h.body}</div>`);
+}
+
 function renderChatConfig(cfg) {
   const persona = cfg.persona || {};
   const starters = cfg.starters || [];
@@ -1167,10 +1539,9 @@ function renderChatConfig(cfg) {
       </div>
       <div class="form-row mb-8">
         <div class="field field-sm"><label>LLM Host</label>
-          <select id="cc-host">
-            <option ${cfg.host==='groq'?'selected':''}>groq</option>
-            <option ${cfg.host==='ollama'?'selected':''}>ollama</option>
-          </select>
+          ${_segmented('cc-host',
+            [{ value: 'groq', label: 'groq' }, { value: 'ollama', label: 'ollama' }],
+            cfg.host)}
         </div>
         <div class="field field-md"><label>Model</label>
           <input type="text" id="cc-model" value="${_esc(cfg.model||'')}">
@@ -1220,66 +1591,61 @@ async function saveChatConfig(event) {
 }
 
 function renderIdentityConfig(cfg) {
-  const data = cfg.data || cfg;
-  const langs = Object.keys(data).filter(k => typeof data[k] === 'object');
-  if (!langs.length) {
-    document.getElementById('identity-config-form').innerHTML =
-      '<div class="empty">No identity data. Run seed or add manually.</div>';
-    return;
-  }
-
-  let html = '<form onsubmit="saveIdentityConfig(event)">';
-  for (const lang of langs) {
-    const d = data[lang] || {};
-    html += `<fieldset style="border:1px solid var(--border);padding:12px;margin-bottom:12px;border-radius:8px">
-      <legend><strong>${_esc(lang.toUpperCase())}</strong></legend>
+  const d = cfg || {};
+  document.getElementById('identity-config-form').innerHTML = `
+    <form onsubmit="saveIdentityConfig(event)">
       <div class="form-row mb-8">
         <div class="field field-md"><label>Name</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="name" value="${_esc(d.name||'')}">
+          <input type="text" id="id-name" value="${_esc(d.name||'')}">
         </div>
         <div class="field field-md"><label>Tagline</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="tagline" value="${_esc(d.tagline||'')}">
+          <input type="text" id="id-tagline" value="${_esc(d.tagline||'')}">
         </div>
         <div class="field field-md"><label>Location</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="location" value="${_esc(d.location||'')}">
+          <input type="text" id="id-location" value="${_esc(d.location||'')}">
         </div>
+      </div>
+      <div class="field mb-8"><label>Bio</label>
+        <textarea id="id-bio" rows="3" style="width:100%">${_esc(d.bio||'')}</textarea>
       </div>
       <div class="form-row mb-8">
         <div class="field field-md"><label>GitHub URL</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="github_url" value="${_esc(d.github_url||'')}">
+          <input type="text" id="id-github" value="${_esc(d.github_url||'')}">
         </div>
         <div class="field field-md"><label>LinkedIn URL</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="linkedin_url" value="${_esc(d.linkedin_url||'')}">
+          <input type="text" id="id-linkedin" value="${_esc(d.linkedin_url||'')}">
         </div>
       </div>
       <div class="form-row mb-8">
         <div class="field field-md"><label>Blog URL</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="blog_url" value="${_esc(d.blog_url||'')}">
+          <input type="text" id="id-blog" value="${_esc(d.blog_url||'')}">
         </div>
         <div class="field field-md"><label>Medium URL</label>
-          <input type="text" class="id-field" data-lang="${_esc(lang)}" data-key="medium_url" value="${_esc(d.medium_url||'')}">
+          <input type="text" id="id-medium" value="${_esc(d.medium_url||'')}">
         </div>
       </div>
       <div class="field mb-8"><label>Description</label>
-        <textarea class="id-field" data-lang="${_esc(lang)}" data-key="description" rows="3" style="width:100%">${_esc(d.description||'')}</textarea>
+        <textarea id="id-description" rows="3" style="width:100%">${_esc(d.description||'')}</textarea>
       </div>
-    </fieldset>`;
-  }
-  html += '<button type="submit" class="btn btn-primary">Save Identity</button></form>';
-  document.getElementById('identity-config-form').innerHTML = html;
+      <button type="submit" class="btn btn-primary">Save Identity</button>
+    </form>`;
 }
 
 async function saveIdentityConfig(event) {
   event.preventDefault();
-  const result = {};
-  document.querySelectorAll('.id-field').forEach(el => {
-    const lang = el.dataset.lang;
-    const key = el.dataset.key;
-    if (!result[lang]) result[lang] = {};
-    result[lang][key] = el.tagName === 'TEXTAREA' ? el.value : el.value;
-  });
+  const body = {
+    name: document.getElementById('id-name').value.trim(),
+    tagline: document.getElementById('id-tagline').value.trim(),
+    location: document.getElementById('id-location').value.trim(),
+    bio: document.getElementById('id-bio').value.trim(),
+    github_url: document.getElementById('id-github').value.trim(),
+    linkedin_url: document.getElementById('id-linkedin').value.trim(),
+    blog_url: document.getElementById('id-blog').value.trim(),
+    medium_url: document.getElementById('id-medium').value.trim(),
+    description: document.getElementById('id-description').value.trim(),
+  };
   try {
-    await api('PUT', '/config/identity', { data: result });
+    await api('PUT', '/config/identity', body);
     alert('Identity saved.');
   } catch (ex) { alert('Error: ' + ex.message); }
 }
@@ -1331,10 +1697,9 @@ function renderMetricsConfig(cfg) {
     <form onsubmit="saveMetricsConfig(event)">
       <div class="form-row mb-8">
         <div class="field field-sm"><label>Enabled</label>
-          <select id="mc-enabled">
-            <option ${cfg.enabled!==false?'selected':''}>true</option>
-            <option ${cfg.enabled===false?'selected':''}>false</option>
-          </select>
+          ${_segmented('mc-enabled',
+            [{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }],
+            cfg.enabled!==false ? 'true' : 'false')}
         </div>
         <div class="field field-sm"><label>Version</label>
           <input type="text" id="mc-version" value="${_esc(cfg.version||'1.0')}">
@@ -1358,8 +1723,9 @@ function renderMetricsConfig(cfg) {
       </div>
 
       <p class="card-title mb-8">Experience</p>
+      <p class="text-muted text-sm mb-8">Total years using a skill. Overlapping periods (e.g. two concurrent jobs) count once, not twice, unless deduplication is off. Ongoing use gets a bonus so active skills outrank stale ones of equal duration.</p>
       <div class="form-row mb-8">
-        <label class="checkbox-row">
+        <label class="checkbox-row switch">
           <input type="checkbox" id="mc-exp-dedup" ${exp.deduplicate_overlaps!==false?'checked':''}> Deduplicate overlaps
         </label>
         <div class="field field-sm"><label>Current bonus</label>
@@ -1368,6 +1734,7 @@ function renderMetricsConfig(cfg) {
       </div>
 
       <p class="card-title mb-8">Diversity</p>
+      <p class="text-muted text-sm mb-8">Rewards using a skill across different kinds of work (a job and a side project) rather than repeatedly in one place. Blends breadth across flavors (stages/oeuvre) and categories (job/coding/article/etc.) on a log scale, so the 5th use matters less than the 1st.</p>
       <div class="form-row mb-8">
         <div class="field field-sm"><label>Flavor weight</label>
           <input type="number" id="mc-div-fw" value="${div.flavor_weight||0.5}" step="0.1">
@@ -1381,6 +1748,7 @@ function renderMetricsConfig(cfg) {
       </div>
 
       <p class="card-title mb-8">Growth</p>
+      <p class="text-muted text-sm mb-8">Fits a trend line to yearly entity counts for a tag: "increasing" above the increasing threshold, "decreasing" below the decreasing threshold, else "stable". Needs a minimum timespan and entity count before calling a trend at all.</p>
       <div class="form-row mb-8">
         <div class="field field-sm"><label>Min timespan (years)</label>
           <input type="number" id="mc-gr-ts" value="${growth.min_timespan_years||1.0}" step="0.5">
@@ -1394,6 +1762,7 @@ function renderMetricsConfig(cfg) {
       </div>
 
       <p class="card-title mb-8">Relevance Weights</p>
+      <p class="text-muted text-sm mb-8">The final ranking score blends Proficiency, Frequency, Recency, Diversity, Experience, and Growth by these weights (should sum to ~1.0). Raising one weight makes that dimension matter more when ranking skills for a query.</p>
       <div class="form-row mb-8">
         <div class="field field-sm"><label>Proficiency</label>
           <input type="number" id="mc-rw-prof" value="${relW.proficiency||0.30}" step="0.05">
@@ -1426,8 +1795,49 @@ function renderMetricsConfig(cfg) {
         </div>
       </div>
 
-      <button type="submit" class="btn btn-primary">Save Metrics Config</button>
-    </form>`;
+      <div class="flex gap-12 items-center">
+        <button type="submit" class="btn btn-primary">Save Metrics Config</button>
+        <span id="mc-recalc-status" class="text-muted text-sm"></span>
+      </div>
+    </form>
+    <div class="card-title mb-8 mt-12">Top Proficiencies</div>
+    <p class="text-muted text-sm mb-8">Recalculated automatically whenever you save the config above.</p>
+    <div id="metrics-preview"></div>`;
+  loadMetricsPreview();
+}
+
+async function loadMetricsPreview() {
+  const el = document.getElementById('metrics-preview');
+  if (!el) return;
+  el.innerHTML = '<div class="loading-block"><span class="spinner"></span> Loading…</div>';
+  try {
+    const data = await api('GET', '/db/metrics?order_by=proficiency&limit=5');
+    if (!data) return;
+    el.innerHTML = !data.metrics.length
+      ? '<div class="empty text-sm">No metrics yet — save the config or run Recalculate.</div>'
+      : `<table>
+           <thead><tr><th>Tag</th><th>Type</th><th>Proficiency</th></tr></thead>
+           <tbody>${data.metrics.map(m => `
+             <tr><td>${_esc(m.tag_name)}</td><td>${_badge(m.tag_type, m.tag_type)}</td>
+             <td class="font-mono">${(m.proficiency||0).toFixed(1)}</td></tr>`).join('')}
+           </tbody>
+         </table>`;
+  } catch (ex) { _err('metrics-preview', ex.message); }
+}
+
+async function _pollJobUntilDone(jobId, onDone) {
+  const poll = setInterval(async () => {
+    try {
+      const d = await api('GET', '/jobs/' + encodeURIComponent(jobId));
+      if (!d || d.status !== 'running') {
+        clearInterval(poll);
+        onDone();
+      }
+    } catch (ex) {
+      clearInterval(poll);
+      onDone();
+    }
+  }, 1500);
 }
 
 async function saveMetricsConfig(event) {
@@ -1469,42 +1879,31 @@ async function saveMetricsConfig(event) {
       stale_threshold_years: parseInt(document.getElementById('mc-rel-st').value),
     },
   };
+  const status = document.getElementById('mc-recalc-status');
   try {
     await api('PUT', '/config/metrics', body);
-    alert('Metrics config saved.');
+    if (status) status.innerHTML = '<span class="spinner"></span> Recalculating…';
+    const job = await api('POST', '/recalculate-metrics');
+    if (job && job.job_id) {
+      _pollJobUntilDone(job.job_id, () => {
+        if (status) status.textContent = 'Updated';
+        loadMetricsPreview();
+      });
+    } else if (status) {
+      status.textContent = 'Saved';
+    }
   } catch (ex) { alert('Error: ' + ex.message); }
 }
 
 // ────────────────────────────────────────────────────────
 // JOBS + ACTIONS
 // ────────────────────────────────────────────────────────
-document.getElementById('scrape-form').addEventListener('submit', async e => {
-  e.preventDefault();
-  const source      = document.getElementById('j-source').value.trim() || null;
-  const force       = document.getElementById('j-force').checked;
-  const disable_llm = document.getElementById('j-no-llm').checked;
-  const llm_only    = document.getElementById('j-llm-only').checked;
-  const export_yaml = document.getElementById('j-yaml').checked;
-  const result      = document.getElementById('scrape-result');
-  result.innerHTML  = '';
-  try {
-    const data = await api('POST', '/scrape', { source, force, disable_llm, llm_only, export_yaml });
-    if (!data) return;
-    result.innerHTML = `<div class="alert alert-success">
-      Job started — ID: <strong>${_esc(data.job_id)}</strong>
-    </div>`;
-    loadJobs();
-  } catch (ex) {
-    result.innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
-  }
-});
-
 async function triggerAction(endpoint, label) {
   if (!confirm(`Run ${label}?`)) return;
   try {
     const data = await api('POST', endpoint);
     if (data) alert(`${label} job started (ID: ${data.job_id})`);
-    if (_currentTab === 'jobs') loadJobs();
+    if (_currentTab === 'sources') loadJobs();
   } catch (ex) { alert('Error: ' + ex.message); }
 }
 
@@ -1609,10 +2008,11 @@ function _startWizard(readiness) {
 function _renderStepper() {
   document.getElementById('wizard-stepper').innerHTML = _WIZ_STEPS.map((s, i) =>
     `<div class="wiz-dot${i === _wizStep ? ' active' : ''}${i < _wizStep ? ' completed' : ''}"
-          title="${_esc(s.label)}">${i < _wizStep ? '✓' : i + 1}</div>`
+          title="${_esc(s.label)}">${i < _wizStep ? '<i data-lucide="check" style="width:14px;height:14px"></i>' : i + 1}</div>`
   ).join('');
   document.getElementById('wizard-step-label').textContent =
     `Step ${_wizStep + 1} of ${_WIZ_STEPS.length}: ${_WIZ_STEPS[_wizStep].label}`;
+  window.lucide && window.lucide.createIcons();
 }
 
 function _renderWizardStep() {
@@ -1860,7 +2260,7 @@ async function _wizStep_source(ct) {
           <input type="number" id="wiz-src-limit" value="0" min="0">
           <span class="text-muted text-sm">0 = no limit</span>
         </div>
-        <label class="checkbox-row" style="margin-top:20px">
+        <label class="checkbox-row switch" style="margin-top:20px">
           <input type="checkbox" id="wiz-src-llm" checked> LLM processing
         </label>
       </div>
@@ -1962,7 +2362,7 @@ async function _wizStep_finish(ct) {
     const warnings = (readiness && readiness.warnings) || [];
     const rows = Object.entries(sections).map(([ns, info]) =>
       `<tr><td>${_esc(ns)}</td><td>${info.present
-        ? '<span style="color:var(--success)">✓ Configured</span>'
+        ? '<span style="color:var(--success);display:inline-flex;align-items:center;gap:5px"><i data-lucide="check" style="width:14px;height:14px"></i> Configured</span>'
         : '<span style="color:var(--text-muted)">— Not set</span>'}</td>
        <td>${info.key_count} keys</td></tr>`).join('');
     ct.innerHTML = `
@@ -1981,6 +2381,7 @@ async function _wizStep_finish(ct) {
       </div>
       <div id="wiz-ingest-result" style="margin-top:12px"></div>
       <div id="wiz-error" class="alert alert-error" style="display:none;margin-top:12px"></div>`;
+    window.lucide && window.lucide.createIcons();
   } catch (ex) {
     ct.innerHTML = `<div class="alert alert-error">${_esc(ex.message)}</div>`;
   }

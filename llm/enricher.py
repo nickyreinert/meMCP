@@ -9,17 +9,13 @@ Also provides: tag suggestion, entity type classification.
 """
 
 import os
+import sqlite3
 import time
 import logging
+from pathlib import Path
 from typing import Optional
 
-from llm.prompts import (
-    DESCRIPTION_SYSTEM,
-    TAG_SYSTEM,
-    TYPE_SYSTEM,
-    TRANSLATION_SYSTEM,
-    GREETING_SYSTEM,
-)
+from llm.prompts import get_prompt, DESCRIPTION_SYSTEM, TAG_SYSTEM, TYPE_SYSTEM
 
 log = logging.getLogger("mcp.llm")
 
@@ -45,7 +41,7 @@ STOP_WORDS = {
 
 class LLMEnricher:
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, db_conn: Optional[sqlite3.Connection] = None):
         self.backend   = cfg.get("backend", "none")
         self.model     = cfg.get("model", "llama3-8b-8192")
         self.ollama_url = cfg.get("ollama_url", "http://localhost:11434")
@@ -54,6 +50,7 @@ class LLMEnricher:
         self._groq: Optional[object] = None
         self._call_count = 0
         self._error_count = 0
+        self._db_conn = db_conn
 
         if self.backend == "groq":
             if not GROQ_AVAILABLE:
@@ -91,13 +88,15 @@ class LLMEnricher:
             log.debug(f"Text shrunk: {len(raw_text[:1200])} → {len(text_to_send)} chars")
         
         prompt = f"Context: {context}\n\nRaw text:\n{text_to_send}"
-        return self._call(DESCRIPTION_SYSTEM, prompt, max_tokens=100) or raw_text.strip()[:500]
+        system = get_prompt("description_system", self._db_conn)
+        return self._call(system, prompt, max_tokens=100) or raw_text.strip()[:500]
 
     def suggest_tags(self, text: str) -> list[str]:
         """Return a list of suggested tags for the given text."""
         if not self._ready() or not text.strip():
             return []
-        result = self._call(TAG_SYSTEM, text[:800], max_tokens=60)
+        system = get_prompt("tag_system", self._db_conn)
+        result = self._call(system, text[:800], max_tokens=60)
         if not result:
             return []
         return [t.strip() for t in result.split(",") if t.strip()]
@@ -161,7 +160,8 @@ class LLMEnricher:
                  "side_project","literature","technology","skill","achievement","event"}
         if not self._ready():
             return None
-        result = self._call(TYPE_SYSTEM, text[:500], max_tokens=10)
+        system = get_prompt("type_system", self._db_conn)
+        result = self._call(system, text[:500], max_tokens=10)
         if result and result.strip() in valid:
             return result.strip()
         return None
@@ -283,10 +283,10 @@ class TranslationMixin:
             return None
 
         lang_name = LANG_NAMES.get(target_lang, target_lang)
-        system = (
-            GREETING_SYSTEM if context == "greeting"
-            else TRANSLATION_SYSTEM
-        ).format(target_lang=lang_name)
+        prompt_id = "greeting_system" if context == "greeting" else "translation_system"
+        # Try DB-backed prompt, use self._db_conn if available (duck-typed via LLMEnricher)
+        db_conn = getattr(self, "_db_conn", None)
+        system = get_prompt(prompt_id, db_conn).format(target_lang=lang_name)
 
         result = self._call(system, text.strip()[:1500],
                             max_tokens=300, retries=2)
